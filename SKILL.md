@@ -1,6 +1,6 @@
 ---
-name: 'ZPT_course_recommender'
-description: 这个项目会根据教授评分，历史给分律，选课时间先后，专业限制，先修课要求以及课表时间冲突等因素，给UCI学生推荐他们合适的课程，只有当用户问到跟选课，教授，时间相关的问题时才会触发
+name: recommend-course
+description: 根据用户要求推荐课程。当用户提问关于课程、教授推荐相关问题时调用。
 metadata:
   tags:
     - scheduling
