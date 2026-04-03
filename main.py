@@ -1,106 +1,151 @@
 # main.py
 #
-# 入口文件：接收用户输入，驱动整个 Router → Skill → Handler pipeline。
-# 当前阶段用于手动测试和验证 routing 通路是否符合预期。
+# Demo 入口：驱动完整的 Router → Skill Pipeline → 回答生成流程。
+# 当前阶段用于手动验证 pipeline 通路和各模块之间的数据流。
 # ─────────────────────────────────────────────────────────────────────────────
 
-from state.session_state import SessionState, UserProfile
-from router.intent_classifier import is_course_related, classify_course_intent
-from router.skill_gate import should_invoke_course_skill
-from skills.course_skill import invoke_course_skill
+from state.user_context import ConversationState, UserContext, DifficultyPreference
+from router.intent_classifier import is_course_related
+from skill.course_skill import run_skill_pipeline, SkillResponse
 
 
-def process_user_input(question: str, state: SessionState) -> dict:
+def chat(question: str, state: ConversationState) -> str:
     """
-    完整的 routing pipeline：从用户输入到 handler 结果。
+    单轮对话处理入口。
 
-    Pipeline 流程：
-        1. is_course_related()         → 判断是否选课相关
-        2. classify_course_intent()    → 分类子意图
-        3. should_invoke_course_skill() → 判断是否调用 skill
-        4. invoke_course_skill()        → 调用 skill（若需要）
+    完整流程：
+        1. Router: is_course_related() 判断是否触发 skill
+        2. Skill Pipeline: run_skill_pipeline() 执行 5 步流程
+        3. 返回最终回复文本
 
     Args:
-        question (str): 用户当前输入。
-        state (SessionState): 当前会话状态。
+        question: 用户当前输入。
+        state:    当前会话状态（多轮对话共享）。
 
     Returns:
-        dict: 包含路由决策过程和最终结果的响应对象。
+        str: 最终给用户的回复文本。
     """
 
-    response = {
-        "question": question,
-        "is_course_related": None,
-        "intent": None,
-        "skill_invoked": False,
-        "result": None,
-        "reply": None,  # 最终给用户的文本回复
-    }
+    # ── Router：判断是否触发 course skill ───────────────────────────────────
+    state.current_question = question
 
-    # ── Step 1: 判断是否选课相关 ──────────────────────────────────────────────
-    related = is_course_related(question, state)
-    response["is_course_related"] = related
-    state.is_course_related = related
+    triggered = is_course_related(question, state)
+    state.skill_triggered = triggered
 
-    if not related:
-        # TODO: 由开发者决定非选课相关问题的处理方式
-        # 例如: 交给通用对话模块、返回引导语等
-        response["reply"] = "[TODO] 非选课相关问题的处理逻辑尚未实现。"
-        return response
+    if not triggered:
+        # TODO: 将非选课相关问题路由到通用对话模块
+        # 当前占位：直接返回提示文本
+        return "[通用对话] 这个问题超出了我的选课助手范围，你可以问我关于 UCI 课程、教授、排课等问题。"
 
-    # ── Step 2: 分类子意图 ────────────────────────────────────────────────────
-    intent = classify_course_intent(question, state)
-    response["intent"] = intent
-    state.current_intent = intent
+    # ── Skill Pipeline：执行 SKILL.md 定义的 5 步流程 ────────────────────────
+    response: SkillResponse = run_skill_pipeline(state)
 
-    # ── Step 3: 判断是否需要调用 skill ────────────────────────────────────────
-    invoke = should_invoke_course_skill(question, state)
-
-    if not invoke:
-        # TODO: 由开发者决定：不调用 skill 时如何回复？
-        # 例如: 用静态 FAQ 回答、提示用户补充信息等
-        response["reply"] = "[TODO] 选课相关但不需要调用 skill 时的处理逻辑尚未实现。"
-        return response
-
-    # ── Step 4: 调用 Course Skill ─────────────────────────────────────────────
-    result = invoke_course_skill(intent=intent, question=question, state=state)
-    response["skill_invoked"] = True
-    response["result"] = result
-    response["reply"] = result.get("response", "[TODO] handler 未返回 response 字段。")
-
-    # 更新会话历史
-    state.conversation_history.append({"role": "user", "content": question})
-    state.conversation_history.append({"role": "assistant", "content": response["reply"]})
-
-    return response
+    return response.reply
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 手动测试入口（临时用，后续替换为真实对话循环或 API 接口）
+# Demo 运行器
 # ─────────────────────────────────────────────────────────────────────────────
+
+def run_demo():
+    """
+    交互式 demo：模拟多轮对话，验证完整 pipeline。
+    """
+
+    print("=" * 60)
+    print("UCI Course Recommendation Assistant — Demo")
+    print("=" * 60)
+    print("输入 'quit' 退出\n")
+
+    # ── 初始化会话状态 ──────────────────────────────────────────────────────
+    # TODO: 开发者可在此预填 profile，模拟不同学生场景
+    profile = UserContext(
+        major=None,               # TODO: 可预填 "Computer Science"
+        year=None,                # TODO: 可预填 "junior"
+        term=None,                # TODO: 可预填 "2025 Spring"
+        selected_courses=[],      # TODO: 可预填 ["CS 161"]
+        completed_courses=[],     # TODO: 可预填 ["ICS 31", "ICS 32", "ICS 33", "ICS 45C", "ICS 46"]
+        difficulty_preference=DifficultyPreference.ANY,
+    )
+    state = ConversationState(user_context=profile)
+
+    while True:
+        try:
+            user_input = input("\nYou: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n再见！")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("quit", "exit", "q"):
+            print("再见！")
+            break
+
+        reply = chat(user_input, state)
+        print(f"\nAssistant: {reply}")
+
+        # Debug 模式：显示当前状态（开发阶段可开启）
+        # _debug_state(state)
+
+
+def _debug_state(state: ConversationState):
+    """开发阶段用：打印当前 state 摘要。"""
+    print(f"\n[DEBUG] intent={state.intent} | "
+          f"awaiting_clarification={state.awaiting_clarification} | "
+          f"skill_triggered={state.skill_triggered} | "
+          f"history_turns={len(state.history)//2}")
+    ctx = state.user_context
+    print(f"[DEBUG] context: term={ctx.term} major={ctx.major} "
+          f"selected={ctx.selected_courses} completed={ctx.completed_courses[:3]}...")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 批量测试用例（验证各意图路由是否正确）
+# ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASES = [
+    # (用户输入, 预期 is_course_related, 预期 intent)
+    ("CS 161 有什么先修课要求？",         True,  "prerequisite_check"),
+    ("Dr. Rina Dechter 的课好不好？",      True,  "professor_review"),
+    ("CS 171 历史给分怎么样？",           True,  "grade_distribution"),
+    ("帮我推荐几门适合 CS 大三的课",      True,  "recommendation"),
+    ("我的课表会不会和 CS 175 冲突？",    True,  "schedule_conflict"),
+    ("ICS 31 算不算 GE？",               True,  "ge_requirement"),
+    ("今天天气怎么样？",                  False, None),
+    ("怎么提高学习效率？",               False, None),
+]
+
+
+def run_batch_test():
+    """
+    批量验证各意图路由是否符合预期。
+    TODO: 实现 intent_classifier 后启用此测试。
+    """
+    print("\n" + "=" * 60)
+    print("Batch Routing Test")
+    print("=" * 60)
+
+    passed = 0
+    for question, expected_related, expected_intent in TEST_CASES:
+        state = ConversationState()
+        state.current_question = question
+
+        try:
+            related = is_course_related(question, state)
+            status = "✓" if related == expected_related else "✗"
+            print(f"{status} [{related}→{expected_related}] {question[:40]}")
+            if related == expected_related:
+                passed += 1
+        except NotImplementedError:
+            print(f"⚠ [NOT IMPL] {question[:40]}")
+
+    print(f"\n通过: {passed}/{len(TEST_CASES)}")
+
 
 if __name__ == "__main__":
-    # TODO: 由开发者替换为真实的用户 profile（或通过对话收集）
-    profile = UserProfile(
-        major=None,         # TODO: 填写测试用专业
-        school=None,        # TODO: 填写测试用学院
-        year=None,          # TODO: 填写测试用年级
-        completed_courses=[], # TODO: 填写已修课程
-    )
-    state = SessionState(user_profile=profile)
-
-    # TODO: 替换为真实测试问题，或接入对话循环
-    test_questions = [
-        "What are the prerequisites for CS 161?",
-        "Can you recommend some CS electives for a junior?",
-        "What's the weather like today?",  # 预期：非选课相关
-    ]
-
-    for q in test_questions:
-        print(f"\n{'='*60}")
-        print(f"User: {q}")
-        result = process_user_input(q, state)
-        print(f"is_course_related : {result['is_course_related']}")
-        print(f"intent            : {result['intent']}")
-        print(f"skill_invoked     : {result['skill_invoked']}")
-        print(f"reply             : {result['reply']}")
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        run_batch_test()
+    else:
+        run_demo()
