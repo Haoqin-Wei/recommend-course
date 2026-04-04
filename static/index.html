@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UCI Course Advisor</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242836;
+    --border: #2e3346;
+    --text: #e4e6ef;
+    --text-dim: #8b8fa8;
+    --accent: #5b8af5;
+    --accent-soft: rgba(91,138,245,.12);
+    --green: #4ade80;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --radius: 12px;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ── LEFT PANEL: Pending Schedule ─────────────────────── */
+  .schedule-panel {
+    width: 300px;
+    min-width: 300px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .schedule-header {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .schedule-header h2 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .schedule-header h2::before {
+    content: '';
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  .schedule-header p {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  .schedule-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+  }
+
+  .schedule-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .schedule-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 10px;
+    position: relative;
+    animation: slideIn .25s ease;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-10px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  .schedule-card .course-id {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent);
+  }
+
+  .schedule-card .course-title {
+    font-size: 13px;
+    color: var(--text);
+    margin-top: 2px;
+  }
+
+  .schedule-card .course-meta {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
+  .schedule-card .status-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    margin-top: 8px;
+  }
+
+  .schedule-card .remove-btn {
+    position: absolute;
+    top: 10px; right: 10px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: .15s;
+  }
+
+  .schedule-card .remove-btn:hover {
+    background: rgba(248,113,113,.15);
+    color: var(--red);
+  }
+
+  /* ── RIGHT: Chat Area ────────────────────────────────── */
+  .chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .chat-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .chat-header .logo {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #3b5bdb, #5b8af5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    color: #fff;
+    flex-shrink: 0;
+  }
+
+  .chat-header h1 {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .chat-header span {
+    font-size: 12px;
+    color: var(--text-dim);
+    background: var(--surface2);
+    padding: 3px 10px;
+    border-radius: 20px;
+    margin-left: auto;
+  }
+
+  /* ── Messages ─────────────────────────────────────────── */
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .msg {
+    max-width: 680px;
+    line-height: 1.65;
+    font-size: 14px;
+    animation: fadeUp .2s ease;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg.user {
+    align-self: flex-end;
+    background: var(--accent);
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: var(--radius) var(--radius) 4px var(--radius);
+  }
+
+  .msg.assistant {
+    align-self: flex-start;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 14px 18px;
+    border-radius: 4px var(--radius) var(--radius) var(--radius);
+  }
+
+  .msg.assistant strong { color: var(--accent); }
+
+  .followups {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .followup-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 12px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    cursor: pointer;
+    transition: .15s;
+    font-family: inherit;
+  }
+
+  .followup-btn:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* ── Add-to-schedule buttons inside messages ──────────── */
+  .add-course-btn {
+    display: inline-block;
+    background: var(--accent-soft);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-left: 8px;
+    transition: .15s;
+    font-family: inherit;
+  }
+
+  .add-course-btn:hover {
+    background: var(--accent);
+    color: #fff;
+  }
+
+  /* ── Input ────────────────────────────────────────────── */
+  .input-area {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  .input-row {
+    display: flex;
+    gap: 10px;
+    max-width: 680px;
+  }
+
+  .input-row input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    transition: .15s;
+  }
+
+  .input-row input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .input-row input::placeholder { color: var(--text-dim); }
+
+  .input-row button {
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: .15s;
+  }
+
+  .input-row button:hover { filter: brightness(1.1); }
+  .input-row button:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* ── Scrollbar ────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+  /* ── Loading dots ─────────────────────────────────────── */
+  .typing-dots span {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    margin: 0 2px;
+    animation: bounce .6s infinite alternate;
+  }
+  .typing-dots span:nth-child(2) { animation-delay:.2s; }
+  .typing-dots span:nth-child(3) { animation-delay:.4s; }
+  @keyframes bounce { to { transform: translateY(-6px); opacity:.4; } }
+
+  /* ── Responsive ───────────────────────────────────────── */
+  @media (max-width: 768px) {
+    .schedule-panel { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Left Panel: Pending Schedule ───────────────────── -->
+<aside class="schedule-panel">
+  <div class="schedule-header">
+    <h2>My Schedule</h2>
+    <p>Fall 2025 · Pending</p>
+  </div>
+  <div class="schedule-list" id="scheduleList">
+    <div class="schedule-empty">
+      Courses you add will appear here.<br>
+      Ask me to recommend some!
+    </div>
+  </div>
+</aside>
+
+<!-- ── Chat Area ─────────────────────────────────────── -->
+<main class="chat-area">
+  <header class="chat-header">
+    <div class="logo">ZA</div>
+    <h1>UCI Course Advisor</h1>
+    <span>Demo · Fall 2025</span>
+  </header>
+
+  <div class="messages" id="messages">
+    <div class="msg assistant">
+      👋 Hi! I'm your UCI course advisor. I can help you find courses, compare professors, check prerequisites, and plan your schedule.<br><br>
+      You're currently set up as a <strong>Computer Science sophomore</strong> with <strong>ICS 31</strong> and <strong>ICS 32</strong> completed, and <strong>ICS 33</strong> on your schedule.<br><br>
+      What would you like help with?
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-row">
+      <input type="text" id="userInput" placeholder="Ask about courses, professors, or schedule…" autocomplete="off">
+      <button id="sendBtn" onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+</main>
+
+<script>
+  const API_BASE = '';
+  const SESSION_ID = 'demo_session';
+  let pendingSchedule = [];
+
+  const messagesEl = document.getElementById('messages');
+  const inputEl = document.getElementById('userInput');
+  const sendBtn = document.getElementById('sendBtn');
+
+  // Send on Enter key
+  inputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  async function sendMessage(text) {
+    const msg = text || inputEl.value.trim();
+    if (!msg) return;
+    inputEl.value = '';
+
+    // Show user message
+    appendMessage('user', msg);
+
+    // Show typing indicator
+    const typingEl = appendTyping();
+    sendBtn.disabled = true;
+
+    try {
+      const res = await fetch(`${API_BASE}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg, session_id: SESSION_ID }),
+      });
+      const data = await res.json();
+
+      typingEl.remove();
+
+      // Show assistant reply
+      appendMessage('assistant', data.reply, data.followups || []);
+
+      // Update schedule panel
+      if (data.pending_schedule) {
+        pendingSchedule = data.pending_schedule;
+        renderSchedule();
+      }
+    } catch (err) {
+      typingEl.remove();
+      appendMessage('assistant', '⚠️ Something went wrong connecting to the server. Is the backend running?');
+    }
+
+    sendBtn.disabled = false;
+    inputEl.focus();
+  }
+
+  function appendMessage(role, text, followups = []) {
+    const el = document.createElement('div');
+    el.className = `msg ${role}`;
+
+    if (role === 'assistant') {
+      // Parse markdown-ish bold and line breaks
+      let html = text
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n/g, '<br>');
+
+      // Inject "Add to schedule" buttons next to course IDs
+      html = html.replace(
+        /\b(ICS\d+|CS\d+\w*|IN4MATX\d+|STATS\d+|WRITING\d+\w*|ANTHRO\d+\w*)\b/g,
+        (match) => `${match} <button class="add-course-btn" onclick="addToSchedule('${match}')">+ Add</button>`
+      );
+
+      el.innerHTML = html;
+
+      // Followup buttons
+      if (followups.length) {
+        const fDiv = document.createElement('div');
+        fDiv.className = 'followups';
+        followups.forEach(fq => {
+          const btn = document.createElement('button');
+          btn.className = 'followup-btn';
+          btn.textContent = fq;
+          btn.onclick = () => sendMessage(fq);
+          fDiv.appendChild(btn);
+        });
+        el.appendChild(fDiv);
+      }
+    } else {
+      el.textContent = text;
+    }
+
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
+  }
+
+  function appendTyping() {
+    const el = document.createElement('div');
+    el.className = 'msg assistant';
+    el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    messagesEl.appendChild(el);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    return el;
+  }
+
+  // ── Schedule Panel ──────────────────────────────────────
+
+  async function addToSchedule(courseId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/schedule/add`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: SESSION_ID, course_id: courseId }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        pendingSchedule = data.pending_schedule;
+        renderSchedule();
+      }
+    } catch (err) {
+      console.error('Failed to add course:', err);
+    }
+  }
+
+  async function removeFromSchedule(courseId) {
+    try {
+      const res = await fetch(`${API_BASE}/api/schedule/remove`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: SESSION_ID, course_id: courseId }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        pendingSchedule = data.pending_schedule;
+        renderSchedule();
+      }
+    } catch (err) {
+      console.error('Failed to remove course:', err);
+    }
+  }
+
+  // Course title lookup (from mock data, matches backend)
+  const COURSE_TITLES = {
+    'ICS31': 'Introduction to Programming',
+    'ICS32': 'Programming with Software Libraries',
+    'ICS33': 'Intermediate Programming',
+    'ICS46': 'Data Structure Implementation and Analysis',
+    'CS161': 'Design and Analysis of Algorithms',
+    'CS122A': 'Introduction to Data Management',
+    'IN4MATX43': 'Introduction to Software Engineering',
+    'STATS67': 'Introduction to Probability and Statistics',
+    'WRITING39C': 'Argument and Research',
+    'ANTHRO2A': 'Introduction to Sociocultural Anthropology',
+  };
+
+  function renderSchedule() {
+    const listEl = document.getElementById('scheduleList');
+
+    if (!pendingSchedule.length) {
+      listEl.innerHTML = '<div class="schedule-empty">Courses you add will appear here.<br>Ask me to recommend some!</div>';
+      return;
+    }
+
+    listEl.innerHTML = pendingSchedule.map(entry => `
+      <div class="schedule-card">
+        <button class="remove-btn" onclick="removeFromSchedule('${entry.course_id}')" title="Remove">×</button>
+        <div class="course-id">${entry.course_id}</div>
+        <div class="course-title">${COURSE_TITLES[entry.course_id] || 'Unknown Course'}</div>
+        <div class="course-meta">Section ${entry.section}</div>
+        <div class="status-badge">${entry.status}</div>
+      </div>
+    `).join('');
+  }
+</script>
+
+</body>
+</html>
