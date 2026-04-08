@@ -106,12 +106,39 @@ def build_clarification_response(missing_fields: list[dict], max_questions: int 
     return "\n".join(lines)
 
 
-def extract_info_from_message(message: str, session_state: dict) -> dict:
+async def extract_info_from_message(message: str, session_state: dict) -> dict:
     """
-    Attempt to extract key fields from a user message.
-    This is a simple keyword-based extractor for the demo.
+    Extract key fields from a user message.
 
-    TODO: Replace with LLM-based extraction for production accuracy.
+    Strategy:
+      1. Try LLM extraction (accurate, handles natural phrasing)
+      2. Fall back to keyword matching if LLM is unavailable
+    """
+    from app.llm.adapter import extract_info_llm
+
+    # ── Try LLM first ────────────────────────────────────
+    llm_result = await extract_info_llm(message)
+    if llm_result:
+        updates = {}
+        if llm_result.get("term"):
+            updates["term"] = llm_result["term"]
+        if llm_result.get("major"):
+            updates["major"] = llm_result["major"]
+        if llm_result.get("difficulty_preference"):
+            updates["difficulty_preference"] = llm_result["difficulty_preference"]
+        if llm_result.get("recommendation_goal"):
+            updates["recommendation_goal"] = llm_result["recommendation_goal"]
+        if updates:
+            return updates
+
+    # ── Keyword fallback ──────────────────────────────────
+    return _extract_info_keyword(message)
+
+
+def _extract_info_keyword(message: str) -> dict:
+    """
+    Keyword-based field extraction (original demo logic).
+    Used when LLM is unavailable.
     """
     updates = {}
     msg_lower = message.lower()

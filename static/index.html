@@ -3,568 +3,1309 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>UCI Course Advisor</title>
+<title>ZotAdvisor — Academic Planning Console</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* ═══════════════════════════════════════════════════════
+   DESIGN TOKENS
+   ═══════════════════════════════════════════════════════ */
 
-  :root {
-    --bg: #0f1117;
-    --surface: #1a1d27;
-    --surface2: #242836;
-    --border: #2e3346;
-    --text: #e4e6ef;
-    --text-dim: #8b8fa8;
-    --accent: #5b8af5;
-    --accent-soft: rgba(91,138,245,.12);
-    --green: #4ade80;
-    --amber: #fbbf24;
-    --red: #f87171;
-    --radius: 12px;
-  }
+:root {
+  /* ── Neutral scale ───────────────────────────────── */
+  --gray-50:  #f5f5f5;
+  --gray-100: #ececec;
+  --gray-150: #e8e8e8;
+  --gray-200: #d9d9d9;
+  --gray-300: #b5b5b5;
+  --gray-500: #7b7b7b;
+  --gray-700: #404040;
+  --gray-800: #2a2a2a;
+  --gray-850: #222222;
+  --gray-900: #161616;
+  --gray-950: #0f0f0f;
 
-  * { margin:0; padding:0; box-sizing:border-box; }
+  /* ── Color: light gray app background, dark surfaces ── */
+  --bg-app:       #3f3f3f;     /* main page foundation */
+  --bg-shell:     #161616;     /* top bar / side panels */
+  --bg-panel:     #1f1f1f;     /* cards / AI message surfaces */
+  --bg-panel-2:   #262626;     /* user message / secondary surfaces */
+  --bg-elevated:  #2e2e2e;     /* tags / avatars / raised elements */
+  --bg-hover:     #383838;
 
-  body {
-    font-family: 'DM Sans', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    height: 100vh;
-    display: flex;
-    overflow: hidden;
-  }
+  /* ── Borders: black / very dark gray ─────────────── */
+  --border-subtle:  rgba(0, 0, 0, 0.12);
+  --border-default: rgba(0, 0, 0, 0.22);
+  --border-strong:  rgba(0, 0, 0, 0.38);
 
-  /* ── LEFT PANEL: Pending Schedule ─────────────────────── */
-  .schedule-panel {
-    width: 300px;
-    min-width: 300px;
-    background: var(--surface);
-    border-right: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
+  /* ── Text: white on dark surfaces ────────────────── */
+  --text-primary:   #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.78);
+  --text-tertiary:  rgba(255, 255, 255, 0.58);
+  --text-muted:     rgba(255, 255, 255, 0.42);
+  --text-disabled:  rgba(255, 255, 255, 0.25);
 
-  .schedule-header {
-    padding: 20px;
-    border-bottom: 1px solid var(--border);
-  }
+  /* ── Accent: restrained blue ─────────────────────── */
+  --accent:        #6ea8ff;
+  --accent-soft:   rgba(110, 168, 255, 0.12);
+  --accent-medium: rgba(110, 168, 255, 0.22);
+  --accent-strong: #5a93ea;
 
-  .schedule-header h2 {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
+  /* ── Status ──────────────────────────────────────── */
+  --success:      #6bc594;
+  --success-soft: rgba(107, 197, 148, 0.12);
+  --warning:      #e0b26a;
+  --warning-soft: rgba(224, 178, 106, 0.12);
+  --danger:       #e07a82;
+  --danger-soft:  rgba(224, 122, 130, 0.14);
 
-  .schedule-header h2::before {
-    content: '';
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--accent);
-  }
+  /* ── Course block colors (schedule) ──────────────── */
+  --course-1: #6ea8ff;  --course-1s: rgba(110, 168, 255, 0.14);
+  --course-2: #6bc594;  --course-2s: rgba(107, 197, 148, 0.14);
+  --course-3: #b88fde;  --course-3s: rgba(184, 143, 222, 0.14);
+  --course-4: #e07a94;  --course-4s: rgba(224, 122, 148, 0.14);
+  --course-5: #e0b26a;  --course-5s: rgba(224, 178, 106, 0.14);
+  --course-6: #78c7c1;  --course-6s: rgba(120, 199, 193, 0.14);
 
-  .schedule-header p {
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-top: 4px;
-  }
+  /* ── Spacing: 4px system ─────────────────────────── */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
 
-  .schedule-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px;
-  }
+  /* ── Typography ──────────────────────────────────── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
-  .schedule-empty {
-    text-align: center;
-    padding: 40px 20px;
-    color: var(--text-dim);
-    font-size: 13px;
-    line-height: 1.6;
-  }
+  --text-title:    28px;
+  --text-h1:       16px;
+  --text-h2:       14px;
+  --text-body:     14px;
+  --text-secondary-size: 12px;
+  --text-label:    11px;
+  --text-micro:    10px;
 
-  .schedule-card {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px;
-    margin-bottom: 10px;
-    position: relative;
-    animation: slideIn .25s ease;
-  }
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
 
-  @keyframes slideIn {
-    from { opacity: 0; transform: translateX(-10px); }
-    to { opacity: 1; transform: translateX(0); }
-  }
+  --leading-tight:   1.2;
+  --leading-snug:    1.3;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.6;
 
-  .schedule-card .course-id {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--accent);
-  }
+  /* ── Radius ──────────────────────────────────────── */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
 
-  .schedule-card .course-title {
-    font-size: 13px;
-    color: var(--text);
-    margin-top: 2px;
-  }
+  /* ── Shadows ─────────────────────────────────────── */
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.18);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.24);
 
-  .schedule-card .course-meta {
-    font-size: 11px;
-    color: var(--text-dim);
-    margin-top: 6px;
-  }
+  /* ── Motion ──────────────────────────────────────── */
+  --transition: 160ms ease;
+  --transition-slow: 240ms ease;
 
-  .schedule-card .status-badge {
-    display: inline-block;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .5px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    background: var(--accent-soft);
-    color: var(--accent);
-    margin-top: 8px;
-  }
+  /* ── Schedule panel sizing ───────────────────────── */
+  --sched-default: 520px;
+  --sched-min: 420px;
+  --sched-max: 760px;
+}
 
-  .schedule-card .remove-btn {
+/* ═══════════════════════════════════════════════════════
+   RESET
+   ═══════════════════════════════════════════════════════ */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-size: var(--text-body);
+  line-height: var(--leading-relaxed);
+  font-weight: var(--weight-regular);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+button { font-family: inherit; }
+input { font-family: inherit; }
+
+/* ═══════════════════════════════════════════════════════
+   TYPOGRAPHY UTILITIES
+   ═══════════════════════════════════════════════════════ */
+.t-title    { font-size: var(--text-title); font-weight: var(--weight-semibold); line-height: var(--leading-tight); }
+.t-h1       { font-size: var(--text-h1); font-weight: var(--weight-semibold); line-height: var(--leading-snug); }
+.t-h2       { font-size: var(--text-h2); font-weight: var(--weight-medium); line-height: var(--leading-snug); }
+.t-body     { font-size: var(--text-body); font-weight: var(--weight-regular); line-height: var(--leading-relaxed); }
+.t-secondary{ font-size: var(--text-secondary-size); font-weight: var(--weight-regular); line-height: var(--leading-normal); color: var(--text-secondary); }
+.t-label    {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════════════════
+   TOP BAR
+   ═══════════════════════════════════════════════════════ */
+.topbar {
+  height: 52px;
+  background: var(--bg-shell);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-6);
+  gap: var(--space-5);
+  z-index: 100;
+}
+.topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-h2);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.topbar-brand svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+.topbar-sep {
+  width: 1px;
+  height: 22px;
+  background: var(--border-default);
+}
+.term-select {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: var(--text-secondary-size);
+  font-weight: var(--weight-medium);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  outline: none;
+  transition: all var(--transition);
+}
+.term-select:hover, .term-select:focus {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+.term-select option { background: var(--bg-panel); }
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+.topbar-status .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.topbar-btn {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: var(--text-secondary-size);
+  font-weight: var(--weight-medium);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.topbar-btn:hover {
+  background: var(--bg-panel-2);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+/* ═══════════════════════════════════════════════════════
+   APP BODY
+   ═══════════════════════════════════════════════════════ */
+.app-body {
+  display: flex;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════════════════
+   LEFT PANEL
+   ═══════════════════════════════════════════════════════ */
+.left-panel {
+  width: 240px;
+  min-width: 240px;
+  background: var(--bg-shell);
+  border-right: 1px solid var(--border-default);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-6) var(--space-5);
+}
+.profile-block {
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-6);
+}
+.profile-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-secondary-size);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  margin-bottom: var(--space-3);
+}
+.profile-name {
+  font-size: var(--text-h2);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.profile-meta {
+  font-size: var(--text-secondary-size);
+  color: var(--text-tertiary);
+  margin-top: var(--space-1);
+}
+.left-section-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-3);
+}
+.left-courses {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-6);
+}
+.left-course-tag {
+  font-size: var(--text-secondary-size);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  transition: all var(--transition);
+}
+.left-course-tag:hover {
+  background: var(--bg-panel-2);
+  border-color: var(--border-default);
+}
+.left-course-tag .dot-complete {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.left-course-tag .dot-enrolled {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.left-spacer { flex: 1; }
+.left-footer {
+  font-size: var(--text-label);
+  color: var(--text-muted);
+  line-height: var(--leading-normal);
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+
+/* ═══════════════════════════════════════════════════════
+   CHAT PANEL
+   ═══════════════════════════════════════════════════════ */
+.chat-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-app);
+}
+.chat-header {
+  height: 52px;
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-8);
+  gap: var(--space-3);
+  background: var(--bg-shell);
+}
+.chat-header-title {
+  font-size: var(--text-h1);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.chat-header-pill {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--success);
+  background: var(--success-soft);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.chat-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ── Messages ──────────────────────────────────────── */
+.msg {
+  max-width: 760px;
+  animation: fadeIn 240ms ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg-user {
+  align-self: flex-end;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-body);
+  line-height: var(--leading-normal);
+}
+
+.msg-ai { align-self: flex-start; width: 100%; max-width: 760px; }
+.msg-ai-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.msg-ai-body {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  font-size: var(--text-body);
+  color: var(--text-secondary);
+  line-height: var(--leading-relaxed);
+}
+.msg-ai-body strong {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+/* ── Course cards ──────────────────────────────────── */
+.cards-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.course-card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-4) var(--space-5);
+  transition: all var(--transition);
+}
+.course-card:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-2);
+}
+.course-card.added {
+  border-color: rgba(95, 184, 138, 0.4);
+  background: var(--bg-panel);
+}
+.course-card.added::before {
+  content: '';
+  display: block;
+  width: 3px;
+  height: calc(100% - 24px);
+  background: var(--success);
+  position: absolute;
+  left: -1px;
+  top: 12px;
+  border-radius: 2px;
+}
+.course-card { position: relative; }
+
+.cc-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+.cc-id-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.cc-id {
+  font-size: var(--text-h2);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.cc-units {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.cc-title {
+  font-size: var(--text-secondary-size);
+  color: var(--text-tertiary);
+  margin-top: var(--space-1);
+}
+.cc-actions { display: flex; gap: var(--space-2); flex-shrink: 0; }
+.cc-btn {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid;
+  transition: all var(--transition);
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.cc-btn-add {
+  background: var(--accent-soft);
+  border-color: var(--accent-medium);
+  color: var(--accent);
+}
+.cc-btn-add:hover {
+  background: var(--accent-medium);
+  border-color: var(--accent);
+}
+.cc-btn-remove {
+  background: var(--danger-soft);
+  border-color: rgba(217, 112, 120, 0.25);
+  color: var(--danger);
+}
+.cc-btn-remove:hover {
+  background: rgba(217, 112, 120, 0.18);
+  border-color: var(--danger);
+}
+
+.cc-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.cc-tag {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+.cc-tag-prereq-warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.cc-tag-seats-0 {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.cc-reason {
+  font-size: var(--text-secondary-size);
+  color: var(--text-tertiary);
+  margin-top: var(--space-3);
+  line-height: var(--leading-normal);
+}
+.cc-section-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-secondary-size);
+  color: var(--text-tertiary);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* ── Follow-up chips ───────────────────────────────── */
+.followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+.followup-chip {
+  font-size: var(--text-secondary-size);
+  font-weight: var(--weight-medium);
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  padding: var(--space-2) var(--space-4);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.followup-chip:hover {
+  background: var(--bg-panel-2);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+/* ── Typing indicator ──────────────────────────────── */
+.typing-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  width: fit-content;
+}
+.typing-bar span {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: pulse 700ms infinite alternate;
+}
+.typing-bar span:nth-child(2) { animation-delay: 150ms; }
+.typing-bar span:nth-child(3) { animation-delay: 300ms; }
+@keyframes pulse { to { opacity: 0.25; } }
+
+/* ── Input area ────────────────────────────────────── */
+.input-area {
+  border-top: 1px solid var(--border-default);
+  padding: var(--space-5) var(--space-8);
+  background: var(--bg-shell);
+}
+.input-row {
+  display: flex;
+  gap: var(--space-3);
+  max-width: 760px;
+}
+.input-field {
+  flex: 1;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-size: var(--text-body);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: border-color var(--transition);
+}
+.input-field:focus { border-color: var(--accent); }
+.input-field::placeholder { color: var(--text-muted); }
+.send-btn {
+  background: var(--accent-strong);
+  border: none;
+  color: white;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-secondary-size);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: filter var(--transition);
+  letter-spacing: 0.02em;
+}
+.send-btn:hover { filter: brightness(1.1); }
+.send-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* ═══════════════════════════════════════════════════════
+   SCHEDULE PANEL
+   ═══════════════════════════════════════════════════════ */
+.schedule-panel {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-shell);
+  border-left: 1px solid var(--border-default);
+  transition: width var(--transition-slow) cubic-bezier(0.25, 0.8, 0.25, 1);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+.schedule-panel.open {
+  width: var(--sched-default);
+  min-width: var(--sched-min);
+}
+.schedule-panel.resizing {
+  transition: none;
+  user-select: none;
+}
+
+.resize-handle {
+  position: absolute;
+  top: 0; left: 0;
+  width: 6px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 20;
+  background: transparent;
+  transition: background var(--transition);
+}
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 2px;
+  height: 32px;
+  background: var(--border-default);
+  border-radius: 2px;
+  transform: translateY(-50%);
+  transition: background var(--transition);
+}
+.resize-handle:hover::after,
+.schedule-panel.resizing .resize-handle::after {
+  background: var(--accent);
+  height: 48px;
+}
+.schedule-panel:not(.open) .resize-handle { display: none; }
+
+.schedule-header {
+  height: 52px;
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-5) 0 var(--space-6);
+  gap: var(--space-3);
+  flex-shrink: 0;
+  background: var(--bg-shell);
+}
+.schedule-header-title {
+  font-size: var(--text-h1);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+.schedule-header .pill {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--text-tertiary);
+  background: var(--bg-elevated);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.02em;
+}
+.schedule-close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition);
+}
+.schedule-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-panel-2);
+}
+
+.schedule-body {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-app);
+}
+.schedule-grid {
+  display: grid;
+  grid-template-columns: 56px repeat(5, 1fr);
+  min-height: 100%;
+  position: relative;
+}
+.sg-corner {
+  background: var(--bg-shell);
+  border-bottom: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-subtle);
+}
+.sg-day-header {
+  text-align: center;
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--text-tertiary);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: var(--space-3) 0;
+  background: var(--bg-shell);
+  border-bottom: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-subtle);
+}
+.sg-day-header:last-child { border-right: none; }
+.sg-time-label {
+  font-size: var(--text-label);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  text-align: right;
+  padding: var(--space-1) var(--space-2) 0 0;
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  height: 52px;
+  font-family: var(--font-mono);
+}
+.sg-cell {
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  height: 52px;
+  position: relative;
+}
+.sg-cell:last-child { border-right: none; }
+.sg-event {
+  position: absolute;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-secondary-size);
+  line-height: var(--leading-snug);
+  overflow: hidden;
+  z-index: 2;
+  cursor: default;
+  border-left: 3px solid;
+  transition: all var(--transition);
+}
+.sg-event:hover {
+  filter: brightness(1.15);
+  transform: translateX(1px);
+}
+.sg-event-id {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-h2);
+  color: inherit;
+  letter-spacing: -0.01em;
+}
+.sg-event-detail {
+  font-size: var(--text-label);
+  color: var(--text-tertiary);
+  margin-top: var(--space-1);
+  font-weight: var(--weight-regular);
+}
+.schedule-empty {
+  text-align: center;
+  padding: var(--space-12) var(--space-6);
+  color: var(--text-muted);
+  font-size: var(--text-secondary-size);
+  line-height: var(--leading-relaxed);
+}
+
+/* ═══════════════════════════════════════════════════════
+   SCROLLBARS
+   ═══════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--bg-elevated);
+  border-radius: 4px;
+  border: 2px solid var(--bg-app);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--gray-600); }
+
+/* ═══════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════ */
+@media (max-width: 1100px) {
+  .schedule-panel.open { width: 460px; min-width: 420px; }
+}
+@media (max-width: 900px) {
+  .left-panel { display: none; }
+  .schedule-panel.open { width: 420px; min-width: 360px; }
+}
+@media (max-width: 680px) {
+  .schedule-panel.open {
+    width: 100% !important;
+    min-width: 0;
     position: absolute;
-    top: 10px; right: 10px;
-    background: none;
-    border: none;
-    color: var(--text-dim);
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    padding: 2px 4px;
-    border-radius: 4px;
-    transition: .15s;
+    right: 0; top: 52px; bottom: 0;
+    z-index: 50;
   }
-
-  .schedule-card .remove-btn:hover {
-    background: rgba(248,113,113,.15);
-    color: var(--red);
-  }
-
-  /* ── RIGHT: Chat Area ────────────────────────────────── */
-  .chat-area {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .chat-header {
-    padding: 16px 24px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .chat-header .logo {
-    width: 36px; height: 36px;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #3b5bdb, #5b8af5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 14px;
-    color: #fff;
-    flex-shrink: 0;
-  }
-
-  .chat-header h1 {
-    font-size: 16px;
-    font-weight: 600;
-  }
-
-  .chat-header span {
-    font-size: 12px;
-    color: var(--text-dim);
-    background: var(--surface2);
-    padding: 3px 10px;
-    border-radius: 20px;
-    margin-left: auto;
-  }
-
-  /* ── Messages ─────────────────────────────────────────── */
-  .messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .msg {
-    max-width: 680px;
-    line-height: 1.65;
-    font-size: 14px;
-    animation: fadeUp .2s ease;
-  }
-
-  @keyframes fadeUp {
-    from { opacity: 0; transform: translateY(6px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .msg.user {
-    align-self: flex-end;
-    background: var(--accent);
-    color: #fff;
-    padding: 10px 16px;
-    border-radius: var(--radius) var(--radius) 4px var(--radius);
-  }
-
-  .msg.assistant {
-    align-self: flex-start;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    padding: 14px 18px;
-    border-radius: 4px var(--radius) var(--radius) var(--radius);
-  }
-
-  .msg.assistant strong { color: var(--accent); }
-
-  .followups {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
-  }
-
-  .followup-btn {
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 12px;
-    padding: 6px 14px;
-    border-radius: 20px;
-    cursor: pointer;
-    transition: .15s;
-    font-family: inherit;
-  }
-
-  .followup-btn:hover {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  /* ── Add-to-schedule buttons inside messages ──────────── */
-  .add-course-btn {
-    display: inline-block;
-    background: var(--accent-soft);
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    font-size: 11px;
-    font-weight: 600;
-    padding: 4px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    margin-left: 8px;
-    transition: .15s;
-    font-family: inherit;
-  }
-
-  .add-course-btn:hover {
-    background: var(--accent);
-    color: #fff;
-  }
-
-  /* ── Input ────────────────────────────────────────────── */
-  .input-area {
-    padding: 16px 24px;
-    border-top: 1px solid var(--border);
-  }
-
-  .input-row {
-    display: flex;
-    gap: 10px;
-    max-width: 680px;
-  }
-
-  .input-row input {
-    flex: 1;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    color: var(--text);
-    padding: 12px 16px;
-    border-radius: var(--radius);
-    font-size: 14px;
-    font-family: inherit;
-    outline: none;
-    transition: .15s;
-  }
-
-  .input-row input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
-
-  .input-row input::placeholder { color: var(--text-dim); }
-
-  .input-row button {
-    background: var(--accent);
-    border: none;
-    color: #fff;
-    padding: 12px 20px;
-    border-radius: var(--radius);
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    font-family: inherit;
-    transition: .15s;
-  }
-
-  .input-row button:hover { filter: brightness(1.1); }
-  .input-row button:disabled { opacity: .5; cursor: not-allowed; }
-
-  /* ── Scrollbar ────────────────────────────────────────── */
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-
-  /* ── Loading dots ─────────────────────────────────────── */
-  .typing-dots span {
-    display: inline-block;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--text-dim);
-    margin: 0 2px;
-    animation: bounce .6s infinite alternate;
-  }
-  .typing-dots span:nth-child(2) { animation-delay:.2s; }
-  .typing-dots span:nth-child(3) { animation-delay:.4s; }
-  @keyframes bounce { to { transform: translateY(-6px); opacity:.4; } }
-
-  /* ── Responsive ───────────────────────────────────────── */
-  @media (max-width: 768px) {
-    .schedule-panel { display: none; }
-  }
+}
 </style>
 </head>
 <body>
 
-<!-- ── Left Panel: Pending Schedule ───────────────────── -->
-<aside class="schedule-panel">
-  <div class="schedule-header">
-    <h2>My Schedule</h2>
-    <p>Fall 2025 · Pending</p>
+<!-- ═══ TOP BAR ═══════════════════════════════════════ -->
+<div class="topbar">
+  <div class="topbar-brand">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z"/><path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z"/>
+    </svg>
+    ZotAdvisor
   </div>
-  <div class="schedule-list" id="scheduleList">
-    <div class="schedule-empty">
-      Courses you add will appear here.<br>
-      Ask me to recommend some!
-    </div>
+  <div class="topbar-sep"></div>
+  <select class="term-select" id="termSelect">
+    <option value="Fall 2025" selected>Fall 2025</option>
+    <option value="Winter 2026">Winter 2026</option>
+    <option value="Spring 2026">Spring 2026</option>
+  </select>
+  <div class="topbar-right">
+    <div class="topbar-status"><span class="dot"></span>System ready</div>
+    <button class="topbar-btn" id="toggleScheduleBtn" onclick="toggleSchedule()">Schedule</button>
   </div>
-</aside>
+</div>
 
-<!-- ── Chat Area ─────────────────────────────────────── -->
-<main class="chat-area">
-  <header class="chat-header">
-    <div class="logo">ZA</div>
-    <h1>UCI Course Advisor</h1>
-    <span>Demo · Fall 2025</span>
-  </header>
+<!-- ═══ APP BODY ══════════════════════════════════════ -->
+<div class="app-body">
 
-  <div class="messages" id="messages">
-    <div class="msg assistant">
-      👋 Hi! I'm your UCI course advisor. I can help you find courses, compare professors, check prerequisites, and plan your schedule.<br><br>
-      You're currently set up as a <strong>Computer Science sophomore</strong> with <strong>ICS 31</strong> and <strong>ICS 32</strong> completed, and <strong>ICS 33</strong> on your schedule.<br><br>
-      What would you like help with?
+  <!-- ── Left Panel ─────────────────────────────── -->
+  <aside class="left-panel">
+    <div class="profile-block">
+      <div class="profile-avatar">DS</div>
+      <div class="profile-name">Demo Student</div>
+      <div class="profile-meta">Computer Science</div>
+      <div class="profile-meta">Sophomore · Class of 2027</div>
     </div>
-  </div>
 
-  <div class="input-area">
-    <div class="input-row">
-      <input type="text" id="userInput" placeholder="Ask about courses, professors, or schedule…" autocomplete="off">
-      <button id="sendBtn" onclick="sendMessage()">Send</button>
+    <div class="left-section-label">Completed</div>
+    <div class="left-courses">
+      <div class="left-course-tag"><span class="dot-complete"></span> ICS 31</div>
+      <div class="left-course-tag"><span class="dot-complete"></span> ICS 32</div>
     </div>
-  </div>
-</main>
+
+    <div class="left-section-label">Enrolled</div>
+    <div class="left-courses">
+      <div class="left-course-tag"><span class="dot-enrolled"></span> ICS 33</div>
+    </div>
+
+    <div class="left-spacer"></div>
+    <div class="left-footer">
+      v0.1 · demo<br>
+      UCI Course Planning
+    </div>
+  </aside>
+
+  <!-- ── Center: Chat ───────────────────────────── -->
+  <main class="chat-panel">
+    <div class="chat-header">
+      <div class="chat-header-title">Planning Terminal</div>
+      <div class="chat-header-pill">Active</div>
+    </div>
+
+    <div class="chat-scroll" id="chatScroll">
+      <div class="msg msg-ai">
+        <div class="msg-ai-label">Advisor</div>
+        <div class="msg-ai-body">
+          Welcome to ZotAdvisor. I can help you plan your courses for <strong>Fall 2025</strong>.<br><br>
+          Your profile shows you've completed <strong>ICS 31</strong> and <strong>ICS 32</strong>, and you're currently in <strong>ICS 33</strong>.<br><br>
+          What would you like help with?
+        </div>
+        <div class="followups" id="welcomeFollowups">
+          <button class="followup-chip" onclick="sendMessage('Recommend courses for next quarter')">Recommend courses</button>
+          <button class="followup-chip" onclick="sendMessage('What are some easy GE courses?')">Easy GE courses</button>
+          <button class="followup-chip" onclick="sendMessage('How is professor Thornton?')">Professor ratings</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-row">
+        <input type="text" class="input-field" id="userInput"
+               placeholder="Ask about courses, professors, or schedule…"
+               autocomplete="off">
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── Right: Schedule ────────────────────────── -->
+  <aside class="schedule-panel" id="schedulePanel">
+    <div class="resize-handle" id="resizeHandle"></div>
+    <div class="schedule-header">
+      <div class="schedule-header-title">Weekly Schedule</div>
+      <span class="pill" id="scheduleCount">0 courses</span>
+      <button class="schedule-close" onclick="toggleSchedule()">&#x2715;</button>
+    </div>
+    <div class="schedule-body" id="scheduleBody">
+      <div class="schedule-empty">Add courses from recommendations<br>to build your schedule.</div>
+    </div>
+  </aside>
+
+</div>
 
 <script>
-  const API_BASE = '';
-  const SESSION_ID = 'demo_session';
-  let pendingSchedule = [];
+const API = '';
+const SID = 'demo_session';
+let addedCourses = new Set();
+let scheduleEvents = [];
+let scheduleOpen = false;
+let colorIndex = 0;
+const courseColors = {};
 
-  const messagesEl = document.getElementById('messages');
-  const inputEl = document.getElementById('userInput');
-  const sendBtn = document.getElementById('sendBtn');
+const COLORS = [
+  ['#5b9eff', 'rgba(91, 158, 255, 0.12)'],
+  ['#5fb88a', 'rgba(95, 184, 138, 0.12)'],
+  ['#b385d9', 'rgba(179, 133, 217, 0.12)'],
+  ['#d97894', 'rgba(217, 120, 148, 0.12)'],
+  ['#d4a45c', 'rgba(212, 164, 92, 0.12)'],
+  ['#6dbdb8', 'rgba(109, 189, 184, 0.12)'],
+];
 
-  // Send on Enter key
-  inputEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
+function getCourseColor(id) {
+  if (!courseColors[id]) {
+    courseColors[id] = COLORS[colorIndex % COLORS.length];
+    colorIndex++;
+  }
+  return courseColors[id];
+}
+
+const inputEl = document.getElementById('userInput');
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+async function sendMessage(text) {
+  const msg = text || inputEl.value.trim();
+  if (!msg) return;
+  inputEl.value = '';
+
+  const wf = document.getElementById('welcomeFollowups');
+  if (wf) wf.remove();
+
+  appendUser(msg);
+  const typing = appendTyping();
+  document.getElementById('sendBtn').disabled = true;
+
+  try {
+    const res = await fetch(`${API}/api/chat`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: msg, session_id: SID }),
+    });
+    const data = await res.json();
+    typing.remove();
+    appendAI(data);
+  } catch (err) {
+    typing.remove();
+    appendAI({ reply: 'Connection error — is the backend running?', cards: [], followups: [] });
+  }
+  document.getElementById('sendBtn').disabled = false;
+  inputEl.focus();
+}
+
+function appendUser(text) {
+  const el = document.createElement('div');
+  el.className = 'msg msg-user';
+  el.textContent = text;
+  document.getElementById('chatScroll').appendChild(el);
+  scrollChat();
+}
+
+function appendTyping() {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg msg-ai';
+  wrap.innerHTML = '<div class="msg-ai-label">Advisor</div><div class="typing-bar"><span></span><span></span><span></span></div>';
+  document.getElementById('chatScroll').appendChild(wrap);
+  scrollChat();
+  return wrap;
+}
+
+function appendAI(data) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg msg-ai';
+
+  let html = '<div class="msg-ai-label">Advisor</div>';
+  html += '<div class="msg-ai-body">';
+  html += formatMarkdown(data.reply || '');
+  html += '</div>';
+
+  if (data.cards && data.cards.length > 0) {
+    html += '<div class="cards-row">';
+    for (const card of data.cards) html += renderCard(card);
+    html += '</div>';
+  }
+
+  if (data.followups && data.followups.length > 0) {
+    html += '<div class="followups">';
+    for (const fu of data.followups) {
+      html += `<button class="followup-chip" onclick="sendMessage(\`${fu.replace(/`/g,"'")}\`)">${escHTML(fu)}</button>`;
     }
+    html += '</div>';
+  }
+
+  wrap.innerHTML = html;
+  document.getElementById('chatScroll').appendChild(wrap);
+  scrollChat();
+}
+
+function renderCard(card) {
+  const isAdded = addedCourses.has(card.course_id);
+  const addedClass = isAdded ? ' added' : '';
+
+  let bestSec = card.sections?.[0] || null;
+  for (const s of (card.sections || [])) {
+    if (s.professor_rating?.overall > (bestSec?.professor_rating?.overall || 0)) bestSec = s;
+  }
+
+  let tags = '';
+  if (card.grade_distribution?.avg_gpa) {
+    const gpa = card.grade_distribution.avg_gpa.toFixed(1);
+    tags += `<span class="cc-tag">Avg GPA ${gpa}</span>`;
+  }
+  if (bestSec?.professor_rating?.overall) {
+    tags += `<span class="cc-tag">${bestSec.instructor.split(',')[0]} · ${bestSec.professor_rating.overall}</span>`;
+  }
+  if (!card.prereq_met) {
+    tags += `<span class="cc-tag cc-tag-prereq-warn">Missing ${card.prereq_missing.join(', ')}</span>`;
+  } else {
+    tags += `<span class="cc-tag">Prereqs met</span>`;
+  }
+  if (card.ge_category) {
+    tags += `<span class="cc-tag">${card.ge_category}</span>`;
+  }
+
+  let secRow = '';
+  if (bestSec) {
+    const seats = bestSec.seats_open;
+    const seatTag = seats === 0 ? '<span class="cc-tag cc-tag-seats-0">Full</span>' : '';
+    secRow = `<div class="cc-section-row">
+      <span>${bestSec.days} ${bestSec.time}</span>
+      <span>${bestSec.location}</span>
+      <span>Section ${bestSec.section}</span>
+      ${seatTag}
+    </div>`;
+  }
+
+  const btn = isAdded
+    ? `<button class="cc-btn cc-btn-remove" onclick="removeCourse('${card.course_id}',this)">Remove</button>`
+    : `<button class="cc-btn cc-btn-add" onclick="addCourse('${card.course_id}','${bestSec?.section||"A"}',this)">Add</button>`;
+
+  return `<div class="course-card${addedClass}" id="card-${card.course_id}">
+    <div class="cc-top">
+      <div>
+        <div class="cc-id-row">
+          <div class="cc-id">${card.course_id}</div>
+          <div class="cc-units">${card.units} units</div>
+        </div>
+        <div class="cc-title">${escHTML(card.title)}</div>
+      </div>
+      <div class="cc-actions">${btn}</div>
+    </div>
+    <div class="cc-meta">${tags}</div>
+    ${card.reason ? `<div class="cc-reason">${escHTML(card.reason)}</div>` : ''}
+    ${secRow}
+  </div>`;
+}
+
+async function addCourse(courseId, section, btnEl) {
+  try {
+    const res = await fetch(`${API}/api/schedule/add`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: SID, course_id: courseId, section: section }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      addedCourses.add(courseId);
+      scheduleEvents = data.events || [];
+      updateCardState(courseId, true, section);
+      renderScheduleGrid();
+      if (!scheduleOpen) openSchedule();
+      updateScheduleCount();
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function removeCourse(courseId, btnEl) {
+  try {
+    const res = await fetch(`${API}/api/schedule/remove`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ session_id: SID, course_id: courseId }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      addedCourses.delete(courseId);
+      scheduleEvents = data.events || [];
+      updateCardState(courseId, false);
+      renderScheduleGrid();
+      updateScheduleCount();
+    }
+  } catch (e) { console.error(e); }
+}
+
+function updateCardState(courseId, added, section) {
+  const card = document.getElementById('card-' + courseId);
+  if (!card) return;
+  if (added) {
+    card.classList.add('added');
+    const actions = card.querySelector('.cc-actions');
+    if (actions) actions.innerHTML = `<button class="cc-btn cc-btn-remove" onclick="removeCourse('${courseId}',this)">Remove</button>`;
+  } else {
+    card.classList.remove('added');
+    const actions = card.querySelector('.cc-actions');
+    if (actions) actions.innerHTML = `<button class="cc-btn cc-btn-add" onclick="addCourse('${courseId}','${section||"A"}',this)">Add</button>`;
+  }
+}
+
+function updateScheduleCount() {
+  document.getElementById('scheduleCount').textContent = addedCourses.size + ' course' + (addedCourses.size !== 1 ? 's' : '');
+}
+
+function openSchedule() {
+  scheduleOpen = true;
+  document.getElementById('schedulePanel').classList.add('open');
+}
+function toggleSchedule() {
+  scheduleOpen = !scheduleOpen;
+  document.getElementById('schedulePanel').classList.toggle('open', scheduleOpen);
+}
+
+(function initResize() {
+  const panel = document.getElementById('schedulePanel');
+  const handle = document.getElementById('resizeHandle');
+  const SCHED_MIN = 420;
+  const SCHED_MAX = 760;
+  let dragging = false;
+
+  handle.addEventListener('mousedown', e => {
+    if (!scheduleOpen) return;
+    dragging = true;
+    panel.classList.add('resizing');
+    document.body.style.cursor = 'ew-resize';
+    e.preventDefault();
   });
 
-  async function sendMessage(text) {
-    const msg = text || inputEl.value.trim();
-    if (!msg) return;
-    inputEl.value = '';
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const newWidth = Math.max(SCHED_MIN, Math.min(SCHED_MAX, window.innerWidth - e.clientX));
+    panel.style.width = newWidth + 'px';
+  });
 
-    // Show user message
-    appendMessage('user', msg);
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    panel.classList.remove('resizing');
+    document.body.style.cursor = '';
+    if (scheduleEvents.length > 0) renderScheduleGrid();
+  });
+})();
 
-    // Show typing indicator
-    const typingEl = appendTyping();
-    sendBtn.disabled = true;
+const DAYS = ['Mon','Tue','Wed','Thu','Fri'];
+const START_HOUR = 8;
+const END_HOUR = 19;
+const ROW_HEIGHT = 52;
+const HEADER_HEIGHT = 40;
 
-    try {
-      const res = await fetch(`${API_BASE}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, session_id: SESSION_ID }),
-      });
-      const data = await res.json();
+function renderScheduleGrid() {
+  const body = document.getElementById('scheduleBody');
 
-      typingEl.remove();
-
-      // Show assistant reply
-      appendMessage('assistant', data.reply, data.followups || []);
-
-      // Update schedule panel
-      if (data.pending_schedule) {
-        pendingSchedule = data.pending_schedule;
-        renderSchedule();
-      }
-    } catch (err) {
-      typingEl.remove();
-      appendMessage('assistant', '⚠️ Something went wrong connecting to the server. Is the backend running?');
-    }
-
-    sendBtn.disabled = false;
-    inputEl.focus();
+  if (scheduleEvents.length === 0) {
+    body.innerHTML = '<div class="schedule-empty">Add courses from recommendations<br>to build your schedule.</div>';
+    return;
   }
 
-  function appendMessage(role, text, followups = []) {
-    const el = document.createElement('div');
-    el.className = `msg ${role}`;
+  let html = '<div class="schedule-grid">';
+  html += '<div class="sg-corner"></div>';
+  for (const d of DAYS) html += `<div class="sg-day-header">${d}</div>`;
 
-    if (role === 'assistant') {
-      // Parse markdown-ish bold and line breaks
-      let html = text
-        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\n/g, '<br>');
-
-      // Inject "Add to schedule" buttons next to course IDs
-      html = html.replace(
-        /\b(ICS\d+|CS\d+\w*|IN4MATX\d+|STATS\d+|WRITING\d+\w*|ANTHRO\d+\w*)\b/g,
-        (match) => `${match} <button class="add-course-btn" onclick="addToSchedule('${match}')">+ Add</button>`
-      );
-
-      el.innerHTML = html;
-
-      // Followup buttons
-      if (followups.length) {
-        const fDiv = document.createElement('div');
-        fDiv.className = 'followups';
-        followups.forEach(fq => {
-          const btn = document.createElement('button');
-          btn.className = 'followup-btn';
-          btn.textContent = fq;
-          btn.onclick = () => sendMessage(fq);
-          fDiv.appendChild(btn);
-        });
-        el.appendChild(fDiv);
-      }
-    } else {
-      el.textContent = text;
-    }
-
-    messagesEl.appendChild(el);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return el;
-  }
-
-  function appendTyping() {
-    const el = document.createElement('div');
-    el.className = 'msg assistant';
-    el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-    messagesEl.appendChild(el);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-    return el;
-  }
-
-  // ── Schedule Panel ──────────────────────────────────────
-
-  async function addToSchedule(courseId) {
-    try {
-      const res = await fetch(`${API_BASE}/api/schedule/add`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: SESSION_ID, course_id: courseId }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        pendingSchedule = data.pending_schedule;
-        renderSchedule();
-      }
-    } catch (err) {
-      console.error('Failed to add course:', err);
+  for (let h = START_HOUR; h < END_HOUR; h++) {
+    let label;
+    if (h === 12) label = '12 PM';
+    else if (h < 12) label = `${h} AM`;
+    else label = `${h-12} PM`;
+    html += `<div class="sg-time-label">${label}</div>`;
+    for (let d = 0; d < 5; d++) {
+      html += `<div class="sg-cell" data-day="${DAYS[d]}" data-hour="${h}"></div>`;
     }
   }
+  html += '</div>';
+  body.innerHTML = html;
 
-  async function removeFromSchedule(courseId) {
-    try {
-      const res = await fetch(`${API_BASE}/api/schedule/remove`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: SESSION_ID, course_id: courseId }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        pendingSchedule = data.pending_schedule;
-        renderSchedule();
-      }
-    } catch (err) {
-      console.error('Failed to remove course:', err);
-    }
-  }
+  for (const ev of scheduleEvents) placeEvent(ev);
+}
 
-  // Course title lookup (from mock data, matches backend)
-  const COURSE_TITLES = {
-    'ICS31': 'Introduction to Programming',
-    'ICS32': 'Programming with Software Libraries',
-    'ICS33': 'Intermediate Programming',
-    'ICS46': 'Data Structure Implementation and Analysis',
-    'CS161': 'Design and Analysis of Algorithms',
-    'CS122A': 'Introduction to Data Management',
-    'IN4MATX43': 'Introduction to Software Engineering',
-    'STATS67': 'Introduction to Probability and Statistics',
-    'WRITING39C': 'Argument and Research',
-    'ANTHRO2A': 'Introduction to Sociocultural Anthropology',
-  };
+function placeEvent(ev) {
+  const dayIdx = DAYS.indexOf(ev.day);
+  if (dayIdx < 0) return;
 
-  function renderSchedule() {
-    const listEl = document.getElementById('scheduleList');
+  const startMin = parseTimeToMinutes(ev.start);
+  const endMin = parseTimeToMinutes(ev.end);
+  if (startMin < 0 || endMin < 0) return;
 
-    if (!pendingSchedule.length) {
-      listEl.innerHTML = '<div class="schedule-empty">Courses you add will appear here.<br>Ask me to recommend some!</div>';
-      return;
-    }
+  const gridEl = document.querySelector('.schedule-grid');
+  if (!gridEl) return;
 
-    listEl.innerHTML = pendingSchedule.map(entry => `
-      <div class="schedule-card">
-        <button class="remove-btn" onclick="removeFromSchedule('${entry.course_id}')" title="Remove">×</button>
-        <div class="course-id">${entry.course_id}</div>
-        <div class="course-title">${COURSE_TITLES[entry.course_id] || 'Unknown Course'}</div>
-        <div class="course-meta">Section ${entry.section}</div>
-        <div class="status-badge">${entry.status}</div>
-      </div>
-    `).join('');
-  }
+  const topOffset = ((startMin - START_HOUR * 60) / 60) * ROW_HEIGHT + HEADER_HEIGHT;
+  const height = ((endMin - startMin) / 60) * ROW_HEIGHT;
+
+  const [stroke, fill] = getCourseColor(ev.course_id);
+
+  const evEl = document.createElement('div');
+  evEl.className = 'sg-event';
+  evEl.style.position = 'absolute';
+  evEl.style.top = topOffset + 'px';
+  evEl.style.height = Math.max(height - 4, 24) + 'px';
+  evEl.style.left = `calc(56px + ${dayIdx} * ((100% - 56px) / 5) + 4px)`;
+  evEl.style.width = `calc((100% - 56px) / 5 - 8px)`;
+  evEl.style.background = fill;
+  evEl.style.borderLeftColor = stroke;
+  evEl.style.color = stroke;
+
+  evEl.innerHTML = `
+    <div class="sg-event-id">${ev.course_id}</div>
+    ${height > 36 ? `<div class="sg-event-detail">${ev.start}–${ev.end}${ev.location ? ' · ' + ev.location : ''}</div>` : ''}
+  `;
+
+  gridEl.appendChild(evEl);
+}
+
+function parseTimeToMinutes(t) {
+  const parts = t.split(':');
+  if (parts.length !== 2) return -1;
+  return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+}
+
+function formatMarkdown(text) {
+  return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
+}
+function escHTML(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+function scrollChat() {
+  const el = document.getElementById('chatScroll');
+  requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+}
 </script>
 
 </body>

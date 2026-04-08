@@ -8,8 +8,10 @@ Classifies user messages into:
   - "single_query"          → simplified skill flow (no full profile needed)
   - "off_topic"             → do not activate skill
 
-TODO: Replace keyword-based rules with LLM-based classification
-      via llm/adapter.py → classify_intent_llm()
+Strategy:
+  1. High-confidence keyword match → return immediately (fast path)
+  2. Ambiguous / low-confidence → call LLM for classification
+  3. LLM unavailable → fall back to keyword result
 """
 
 
@@ -47,16 +49,10 @@ OFF_TOPIC_KEYWORDS = [
 ]
 
 
-def classify_intent(message: str) -> dict:
+def classify_intent_rules(message: str) -> dict:
     """
-    Classify the user's message intent.
-
-    Returns:
-        {
-            "intent": "course_recommendation" | "single_query" | "off_topic",
-            "confidence": float,  # 0.0–1.0 (placeholder for LLM scoring)
-            "matched_keywords": list[str],
-        }
+    Rule-based intent classification (fast path).
+    Returns result with confidence score.
     """
     msg_lower = message.lower()
 
@@ -88,10 +84,41 @@ def classify_intent(message: str) -> dict:
             "matched_keywords": matched,
         }
 
-    # Default: ambiguous — in production, escalate to LLM
-    # TODO: Call classify_intent_llm() here
+    # No keywords matched — ambiguous
     return {
         "intent": "off_topic",
         "confidence": 0.3,
         "matched_keywords": [],
     }
+
+
+async def classify_intent(message: str) -> dict:
+    """
+    Classify intent with LLM fallback for ambiguous messages.
+
+    Flow:
+      1. Run keyword rules — if confidence >= 0.7, return immediately
+      2. Otherwise, try LLM classification
+      3. If LLM fails, return the keyword result as-is
+    """
+    from app.llm.adapter import classify_intent_llm
+
+    rules_result = classify_intent_rules(message)
+
+    # High-confidence keyword match → skip LLM
+    if rules_result["confidence"] >= 0.7:
+        return rules_result
+
+    # Ambiguous → try LLM
+    llm_result = await classify_intent_llm(message)
+    if llm_result and "intent" in llm_result:
+        return {
+            "intent": llm_result["intent"],
+            "confidence": llm_result.get("confidence", 0.9),
+            "matched_keywords": [],
+            "entities": llm_result.get("entities", {}),
+            "source": "llm",
+        }
+
+    # LLM unavailable → return keyword result
+    return rules_result
