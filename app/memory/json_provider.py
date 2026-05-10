@@ -1,0 +1,249 @@
+"""
+JSONFileMemoryProvider — file-system backed memory for demo / single-machine use.
+
+File layout per user (under data/memory/):
+    {user_id}/
+        ├── profile.json         Channel A: structured identity (major, year, target_gpa, ...)
+        ├── facts.json           Channel A: event-style hard facts (currently_taking, completed)
+        ├── preferences.json     Channel B: soft preferences from periodic reflection
+        ├── turn_log.jsonl       Append-only log of every turn
+        └── sessions/
+            └── {session_id}.json   Snapshot at session end
+
+Architecture (post-refactor):
+    Channel A — every turn, immediate writes — handled by chat.py via
+        update_profile() and add_fact()
+    Channel B — every N turns, background LLM reflection — handled by
+        chat.py via add_preference() (after reflect_on_history_llm returns)
+    The old inline `[memo]:` mechanism has been removed.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from app.memory.base import MemoryProvider
+
+logger = logging.getLogger(__name__)
+
+# ── Bounded memory limits ─────────────────────────────────
+USER_PROFILE_MAX_CHARS = 1500
+FACTS_MAX_CHARS = 2200
+PREFETCH_MAX_ITEMS = 5
+
+
+class JSONFileMemoryProvider(MemoryProvider):
+    """File-based memory store. Simple, durable, no extra dependencies."""
+
+    def __init__(self, base_dir: str = "data/memory"):
+        self.base_dir = Path(base_dir)
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self._loaded: dict[str, dict] = {}
+
+    @property
+    def name(self) -> str:
+        return "json-file"
+
+    # ── Core lifecycle ──────────────────────────────────────
+
+    def is_available(self) -> bool:
+        try:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            return os.access(self.base_dir, os.W_OK)
+        except OSError:
+            return False
+
+    def initialize(self, session_id: str, user_id: str) -> None:
+        if user_id in self._loaded:
+            return
+        user_dir = self.base_dir / user_id
+        user_dir.mkdir(parents=True, exist_ok=True)
+        self._loaded[user_id] = {
+            "profile": self._read_json(user_dir / "profile.json", {}),
+            "preferences": self._read_json(user_dir / "preferences.json", []),
+            "facts": self._read_json(user_dir / "facts.json", []),
+        }
+        logger.info("Memory loaded for user=%s", user_id)
+
+    # ── Recall channels ─────────────────────────────────────
+
+    def system_prompt_block(self, user_id: str) -> str:
+        data = self._loaded.get(user_id)
+        if not data:
+            return ""
+        lines = []
+        profile = data["profile"]
+        if profile:
+            lines.append("PERSISTENT STUDENT PROFILE:")
+            for k, v in profile.items():
+                if v not in (None, "", []):
+                    lines.append(f"  {k}: {v}")
+        preferences = data["preferences"]
+        if preferences:
+            lines.append("\nLEARNED PREFERENCES (from past sessions):")
+            for p in preferences[-10:]:
+                lines.append(f"  - {p}")
+        return "\n".join(lines)
+
+    def prefetch(self, query: str, user_id: str) -> str:
+        data = self._loaded.get(user_id)
+        if not data:
+            return ""
+        items = data["facts"] + data["preferences"]
+        if not items:
+            return ""
+        keywords = [w.lower() for w in query.split() if len(w) > 3]
+        if not keywords:
+            return ""
+        matched = [
+            item for item in items
+            if any(kw in item.lower() for kw in keywords)
+        ]
+        if not matched:
+            return ""
+        head = "RELEVANT PRIOR CONTEXT (recalled for this query):"
+        bullets = "\n".join(f"  - {m}" for m in matched[:PREFETCH_MAX_ITEMS])
+        return f"{head}\n{bullets}"
+
+    # ── Per-turn ────────────────────────────────────────────
+
+    def on_turn_start(self, turn_number: int, user_id: str) -> Optional[str]:
+        """
+        No-op now. Turn counting lives in MemoryManager.
+        Kept only to satisfy the MemoryProvider interface.
+        """
+        return None
+
+    def sync_turn(
+        self,
+        user_id: str,
+        user_message: str,
+        assistant_message: str,
+        session_id: str,
+    ) -> None:
+        """Append the turn to a JSONL log. No memo extraction anymore."""
+        try:
+            user_dir = self.base_dir / user_id
+            user_dir.mkdir(parents=True, exist_ok=True)
+            entry = {
+                "ts": datetime.utcnow().isoformat(),
+                "session_id": session_id,
+                "user": user_message,
+                "assistant": assistant_message,
+            }
+            with (user_dir / "turn_log.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning("sync_turn failed for user=%s: %s", user_id, e)
+
+    # ── Session boundaries ──────────────────────────────────
+
+    def on_session_end(
+        self,
+        user_id: str,
+        session_id: str,
+        history: list[dict],
+    ) -> None:
+        try:
+            session_dir = self.base_dir / user_id / "sessions"
+            session_dir.mkdir(parents=True, exist_ok=True)
+            snapshot = {
+                "session_id": session_id,
+                "ended_at": datetime.utcnow().isoformat(),
+                "message_count": len(history),
+                "history": history,
+            }
+            with (session_dir / f"{session_id}.json").open("w", encoding="utf-8") as f:
+                json.dump(snapshot, f, ensure_ascii=False, indent=2)
+            logger.info("Session %s archived (%d msgs)", session_id, len(history))
+        except Exception as e:
+            logger.warning("on_session_end failed: %s", e)
+
+    def shutdown(self) -> None:
+        for user_id, data in self._loaded.items():
+            try:
+                self._save_user(user_id, data)
+            except Exception as e:
+                logger.warning("Shutdown flush failed for %s: %s", user_id, e)
+
+    # ── Read API (used by Channel B reflection task) ────────
+
+    def get_preferences(self, user_id: str) -> list[str]:
+        """Return a copy of the user's current preference list."""
+        self._ensure_loaded(user_id)
+        return list(self._loaded[user_id]["preferences"])
+
+    # ── Write API ───────────────────────────────────────────
+
+    def add_preference(self, user_id: str, text: str) -> None:
+        self._ensure_loaded(user_id)
+        text = text.strip()
+        if not text:
+            return
+        # Dedup case-insensitively against existing
+        existing_lower = {p.lower() for p in self._loaded[user_id]["preferences"]}
+        if text.lower() in existing_lower:
+            return
+        self._loaded[user_id]["preferences"].append(text)
+        self._enforce_size_limit(user_id, "preferences", USER_PROFILE_MAX_CHARS)
+        self._save_user(user_id, self._loaded[user_id])
+
+    def add_fact(self, user_id: str, text: str) -> None:
+        self._ensure_loaded(user_id)
+        text = text.strip()
+        if not text:
+            return
+        existing_lower = {f.lower() for f in self._loaded[user_id]["facts"]}
+        if text.lower() in existing_lower:
+            return
+        self._loaded[user_id]["facts"].append(text)
+        self._enforce_size_limit(user_id, "facts", FACTS_MAX_CHARS)
+        self._save_user(user_id, self._loaded[user_id])
+
+    def update_profile(self, user_id: str, updates: dict) -> None:
+        self._ensure_loaded(user_id)
+        cleaned = {k: v for k, v in updates.items() if v not in (None, "", [])}
+        if not cleaned:
+            return
+        # Skip writing if nothing actually changes
+        current = self._loaded[user_id]["profile"]
+        if all(current.get(k) == v for k, v in cleaned.items()):
+            return
+        current.update(cleaned)
+        self._save_user(user_id, self._loaded[user_id])
+
+    # ── Internals ───────────────────────────────────────────
+
+    def _ensure_loaded(self, user_id: str) -> None:
+        if user_id not in self._loaded:
+            self.initialize(session_id="", user_id=user_id)
+
+    def _read_json(self, path: Path, default):
+        if not path.exists():
+            return default
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            logger.warning("Could not read %s, using default", path)
+            return default
+
+    def _save_user(self, user_id: str, data: dict) -> None:
+        user_dir = self.base_dir / user_id
+        user_dir.mkdir(parents=True, exist_ok=True)
+        for key in ("profile", "preferences", "facts"):
+            with (user_dir / f"{key}.json").open("w", encoding="utf-8") as f:
+                json.dump(data[key], f, ensure_ascii=False, indent=2)
+
+    def _enforce_size_limit(self, user_id: str, key: str, max_chars: int) -> None:
+        items = self._loaded[user_id][key]
+        total = sum(len(s) for s in items)
+        while total > max_chars and items:
+            removed = items.pop(0)
+            total -= len(removed)
+            logger.info("Memory full — dropped oldest %s entry for %s", key, user_id)

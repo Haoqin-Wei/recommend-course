@@ -1,27 +1,28 @@
 """
 Chat Router — orchestrates the SKILL.md pipeline.
 
-Frontend data contract — ChatResponse JSON:
-  reply            str       Markdown-ish text answer
-  cards            [Card]    Structured course recommendation cards (may be [])
-  followups        [str]     Suggested follow-up questions
-  intent           str       "course_recommendation" | "single_query" | "off_topic"
-  session_state    dict      Current known fields
-  pending_schedule [Entry]   Courses in the pending schedule
+Two-channel memory architecture:
+    Channel A (immediate, every turn):
+        extract_info_llm() pulls hard facts from the user's message.
+        _capture_hard_facts() routes them:
+          • course status (currently_taking / completed) → session lists + facts.json
+          • identity (major / year / target_gpa / graduation_term) → profile.json
 
-Card schema:
-  course_id, title, units, department, description,
-  ge_category, major_requirement[], prereq_met, prereq_missing[],
-  has_conflict, grade_distribution{}, sections[], reason
+    Channel B (periodic, background):
+        Every REFLECTION_INTERVAL turns (default 3), after the response is
+        sent, FastAPI BackgroundTasks fires _run_reflection_task(). That task
+        spawns an independent LLM call (reflect_on_history_llm) which
+        examines recent history for SOFT patterns and writes them to
+        preferences.json. Does NOT block user-facing latency.
 
-Section schema:
-  section, instructor, days, time, location, seats_open, professor_rating{}
-
-Schedule event schema (returned by /schedule/add and /schedule/remove):
-  course_id, title, section, instructor, day, start, end, location
+LLM-driven card rendering:
+    Cards are filtered to courses the LLM actually mentioned in its reply,
+    in narrative order. Falls back to top-3 primary if the LLM names none.
 """
 
-from fastapi import APIRouter
+import re
+
+from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 
@@ -42,8 +43,18 @@ from app.modules.answer import (
     generate_professor_answer, generate_off_topic_response,
 )
 from app.modules.followup import generate_followups, generate_single_query_followups
+from app.memory import get_memory_manager
 
 router = APIRouter()
+
+
+# Loose course-ID regex for scanning LLM output. Permissive on purpose —
+# we intersect matches with the known candidate pool, so false positives
+# are filtered out automatically.
+_COURSE_ID_SCAN = re.compile(
+    r'\b[A-Z][A-Z0-9]{1,7}\d+[A-Z]?\b',
+    re.IGNORECASE,
+)
 
 
 class ChatRequest(BaseModel):
@@ -61,8 +72,113 @@ class ChatResponse(BaseModel):
     pending_schedule: list[dict] = []
 
 
+# ── Channel A: hard-fact capture (every turn) ────────────
+
+def _merge_into_list(session: dict, field: str, items: list[str]) -> list[str]:
+    """Append items to a session list, dedup case-insensitively. Returns new ones."""
+    existing = session.setdefault(field, [])
+    existing_upper = {c.upper() for c in existing if c}
+    newly_added = []
+    for item in items:
+        if not item:
+            continue
+        canonical = item.upper().strip()
+        if canonical not in existing_upper:
+            existing.append(item)
+            existing_upper.add(canonical)
+            newly_added.append(item)
+    return newly_added
+
+
+# Identity fields that get mirrored into the long-term profile.
+# Other extracted scalars (term, difficulty_preference, recommendation_goal)
+# stay only in session — they're per-term, not stable identity.
+_IDENTITY_FIELDS_FOR_PROFILE = ("major", "year", "target_gpa", "graduation_term")
+
+
+def _capture_hard_facts(
+    session: dict,
+    extracted: dict,
+    user_id: str,
+    mem,
+) -> None:
+    """
+    Channel A: pull every explicitly-stated fact out of `extracted` and route it.
+
+    Mutates `extracted` (pops list/identity keys so update_session() doesn't
+    redundantly process them).
+    """
+    # ── Course status: session lists + facts.json ──
+    currently_taking = extracted.pop("currently_taking", None) or []
+    completed = extracted.pop("completed", None) or []
+
+    if currently_taking:
+        new_courses = _merge_into_list(session, "selected_courses", currently_taking)
+        if mem.provider:
+            for c in new_courses:
+                mem.provider.add_fact(user_id, f"Currently taking {c}")
+
+    if completed:
+        new_courses = _merge_into_list(session, "completed_courses", completed)
+        if mem.provider:
+            for c in new_courses:
+                mem.provider.add_fact(user_id, f"Completed {c}")
+
+    # ── Identity: long-term profile.json ──
+    profile_updates = {}
+    for f in _IDENTITY_FIELDS_FOR_PROFILE:
+        # `major` and `year` are also session fields — read from extracted but
+        # don't pop, so update_session() can mirror them into session state too.
+        v = extracted.get(f) if f in ("major", "year") else extracted.pop(f, None)
+        if v not in (None, "", []):
+            profile_updates[f] = v
+    if profile_updates and mem.provider:
+        mem.provider.update_profile(user_id, profile_updates)
+
+
+# ── Channel B: background reflection (every N turns) ─────
+
+async def _run_reflection_task(user_id: str, history: list[dict]) -> None:
+    """
+    Fired as a FastAPI BackgroundTask AFTER the response is sent.
+    Calls the reflection LLM, writes any new soft preferences.
+    """
+    from app.llm.adapter import reflect_on_history_llm
+    mem = get_memory_manager()
+    if not mem.provider:
+        return
+    existing = mem.get_preferences(user_id)
+    new_prefs = await reflect_on_history_llm(history, existing)
+    if not new_prefs:
+        return
+    for pref in new_prefs:
+        mem.add_preference(user_id, pref)
+
+
+# ── LLM-output scanner for card filtering ────────────────
+
+def _course_ids_in_order(text: str) -> list[str]:
+    """Return course-like tokens in the order they appear, deduped, uppercase."""
+    seen = set()
+    result = []
+    for m in _COURSE_ID_SCAN.finditer(text):
+        cid = m.group().upper().replace(' ', '')
+        if cid not in seen:
+            seen.add(cid)
+            result.append(cid)
+    return result
+
+
+# ── Main chat endpoint ───────────────────────────────────
+
 @router.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
+    user_id = req.student_id or "anonymous"
+    mem = get_memory_manager()
+
+    # Phase 1: initialize memory for this session (idempotent)
+    mem.initialize_session(req.session_id, user_id)
+
     session = get_or_create_session(req.session_id)
     if not session.get("major") and req.student_id:
         load_student_into_session(req.session_id, req.student_id)
@@ -70,9 +186,15 @@ async def chat(req: ChatRequest):
 
     add_message(req.session_id, "user", req.message)
 
+    # Phase 2 start: bump turn counter (no nudge text anymore)
+    mem.on_turn_start(req.session_id, user_id)
+
+    # Channel A: extract hard facts and route them
     extracted = await extract_info_from_message(req.message, session)
     if extracted:
-        session = update_session(req.session_id, extracted)
+        _capture_hard_facts(session, extracted, user_id, mem)
+        if extracted:
+            session = update_session(req.session_id, extracted)
 
     intent_result = await classify_intent(req.message)
     intent = intent_result["intent"]
@@ -86,9 +208,16 @@ async def chat(req: ChatRequest):
         if eu:
             session = update_session(req.session_id, eu)
 
+    memory_context = {
+        "system_prompt_block": mem.system_prompt_block(user_id),
+        "prefetched_context": mem.prefetch(req.message, user_id),
+    }
+
     if intent == "off_topic":
         reply = generate_off_topic_response(req.message)
         add_message(req.session_id, "assistant", reply)
+        mem.sync_turn(user_id, req.message, reply, req.session_id)
+        _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
         return ChatResponse(reply=reply, intent=intent,
                             session_state=get_known_fields(req.session_id))
 
@@ -96,19 +225,41 @@ async def chat(req: ChatRequest):
         missing = detect_missing_fields(session, intent)
         reply = build_clarification_response(missing)
         add_message(req.session_id, "assistant", reply)
+        mem.sync_turn(user_id, req.message, reply, req.session_id)
+        _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
         return ChatResponse(reply=reply, intent=intent,
                             session_state=get_known_fields(req.session_id))
 
     state = get_known_fields(req.session_id)
     if intent == "single_query":
-        reply, cards, followups = await _handle_single_query(req.message, state)
+        reply, cards, followups = await _handle_single_query(req.message, state, memory_context)
     else:
-        reply, cards, followups = await _handle_recommendation(req.message, state)
+        reply, cards, followups = await _handle_recommendation(req.message, state, memory_context)
 
     add_message(req.session_id, "assistant", reply)
+    mem.sync_turn(user_id, req.message, reply, req.session_id)
+    _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
+
     return ChatResponse(reply=reply, cards=cards, followups=followups,
                         intent=intent, session_state=state,
                         pending_schedule=session.get("pending_schedule", []))
+
+
+def _maybe_schedule_reflection(
+    background_tasks: BackgroundTasks,
+    mem,
+    session_id: str,
+    user_id: str,
+    session: dict,
+) -> None:
+    """If this turn is a reflection turn, schedule a background reflection task."""
+    if mem.should_reflect(session_id):
+        history_snapshot = list(session.get("history", []))[-12:]
+        background_tasks.add_task(
+            _run_reflection_task,
+            user_id=user_id,
+            history=history_snapshot,
+        )
 
 
 # ── Card builder ─────────────────────────────────────────
@@ -143,7 +294,7 @@ def _build_card(item: dict, state: dict) -> dict:
     }
 
 
-async def _handle_recommendation(user_msg, state):
+async def _handle_recommendation(user_msg, state, memory_context=None):
     from app.llm.adapter import generate_answer_llm
     results = query_course_recommendations(
         term=state.get("term", "Fall 2025"), major=state.get("major"),
@@ -152,15 +303,26 @@ async def _handle_recommendation(user_msg, state):
         difficulty_preference=state.get("difficulty_preference"),
         recommendation_goal=state.get("recommendation_goal"),
     )
-    cards = [_build_card(i, state) for i in results.get("primary", [])]
-    answer = await generate_answer_llm(user_msg, results, state)
-    if not answer:
+    answer = await generate_answer_llm(user_msg, results, state, memory_context=memory_context)
+
+    if answer:
+        all_candidates = results.get("primary", []) + results.get("flagged", [])
+        by_id = {item["course"]["course_id"].upper(): item for item in all_candidates}
+        cards = []
+        for cid in _course_ids_in_order(answer):
+            if cid in by_id:
+                cards.append(_build_card(by_id[cid], state))
+        if not cards:
+            cards = [_build_card(i, state) for i in results.get("primary", [])[:3]]
+    else:
         answer = generate_recommendation_answer(results, state)
+        cards = [_build_card(i, state) for i in results.get("primary", [])]
+
     followups = generate_followups(results, state, "course_recommendation")
     return answer, cards, followups
 
 
-async def _handle_single_query(message, state):
+async def _handle_single_query(message, state, memory_context=None):
     from app.llm.adapter import generate_answer_llm
     ml = message.lower()
     from app.data.mock_data import COURSES
@@ -182,7 +344,7 @@ async def _handle_single_query(message, state):
                     "sections": data.get("sections", []),
                     "reason": "",
                 }
-                ans = await generate_answer_llm(message, data, state)
+                ans = await generate_answer_llm(message, data, state, memory_context=memory_context)
                 if not ans:
                     ans = generate_single_query_answer(data)
                 fu = generate_single_query_followups(c["course_id"], state)
@@ -191,7 +353,7 @@ async def _handle_single_query(message, state):
     for name in PROFESSOR_RATINGS:
         if name.lower().split(",")[0] in ml:
             rating = query_professor(name)
-            ans = await generate_answer_llm(message, {"professor": name, "rating": rating}, state)
+            ans = await generate_answer_llm(message, {"professor": name, "rating": rating}, state, memory_context=memory_context)
             if not ans:
                 ans = generate_professor_answer(name, rating)
             return ans, [], []
@@ -226,6 +388,22 @@ async def remove_from_schedule(req: ScheduleRequest):
     ]
     events = _build_schedule_events(session)
     return {"ok": True, "pending_schedule": session["pending_schedule"], "events": events}
+
+
+# ── Phase 3: Session end endpoint ────────────────────────
+
+class EndSessionRequest(BaseModel):
+    session_id: str = "demo_session"
+    student_id: Optional[str] = "demo_001"
+
+
+@router.post("/session/end")
+async def end_session(req: EndSessionRequest):
+    user_id = req.student_id or "anonymous"
+    session = get_or_create_session(req.session_id)
+    history = session.get("history", [])
+    get_memory_manager().on_session_end(user_id, req.session_id, history)
+    return {"ok": True, "messages_archived": len(history)}
 
 
 DAY_MAP = {"M": "Mon", "Tu": "Tue", "W": "Wed", "Th": "Thu", "F": "Fri"}
