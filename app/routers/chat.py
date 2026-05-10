@@ -4,22 +4,22 @@ Chat Router — orchestrates the SKILL.md pipeline.
 Two-channel memory architecture:
     Channel A (immediate, every turn):
         extract_info_llm() pulls hard facts from the user's message.
-        _capture_hard_facts() routes them:
-          • course status (currently_taking / completed) → session lists + facts.json
-          • identity (major / year / target_gpa / graduation_term) → profile.json
+        _capture_hard_facts() routes them to the right destinations:
+          • course status → session lists + facts.json
+          • identity → profile.json
+          • stated preferences (difficulty / goal) → facts.json
 
     Channel B (periodic, background):
-        Every REFLECTION_INTERVAL turns (default 3), after the response is
-        sent, FastAPI BackgroundTasks fires _run_reflection_task(). That task
-        spawns an independent LLM call (reflect_on_history_llm) which
-        examines recent history for SOFT patterns and writes them to
-        preferences.json. Does NOT block user-facing latency.
+        Every REFLECTION_INTERVAL turns, after the response is sent,
+        FastAPI BackgroundTasks fires _run_reflection_task(). That task
+        spawns an independent LLM call for SOFT pattern detection.
 
-LLM-driven card rendering:
-    Cards are filtered to courses the LLM actually mentioned in its reply,
-    in narrative order. Falls back to top-3 primary if the LLM names none.
+Logging:
+    INFO-level logs at every capture and reflection step so the operator
+    can watch the memory pipeline live in the uvicorn terminal.
 """
 
+import logging
 import re
 
 from fastapi import APIRouter, BackgroundTasks
@@ -45,12 +45,11 @@ from app.modules.answer import (
 from app.modules.followup import generate_followups, generate_single_query_followups
 from app.memory import get_memory_manager
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 router = APIRouter()
 
-
-# Loose course-ID regex for scanning LLM output. Permissive on purpose —
-# we intersect matches with the known candidate pool, so false positives
-# are filtered out automatically.
 _COURSE_ID_SCAN = re.compile(
     r'\b[A-Z][A-Z0-9]{1,7}\d+[A-Z]?\b',
     re.IGNORECASE,
@@ -75,7 +74,6 @@ class ChatResponse(BaseModel):
 # ── Channel A: hard-fact capture (every turn) ────────────
 
 def _merge_into_list(session: dict, field: str, items: list[str]) -> list[str]:
-    """Append items to a session list, dedup case-insensitively. Returns new ones."""
     existing = session.setdefault(field, [])
     existing_upper = {c.upper() for c in existing if c}
     newly_added = []
@@ -90,77 +88,84 @@ def _merge_into_list(session: dict, field: str, items: list[str]) -> list[str]:
     return newly_added
 
 
-# Identity fields that get mirrored into the long-term profile.
-# Other extracted scalars (term, difficulty_preference, recommendation_goal)
-# stay only in session — they're per-term, not stable identity.
+# Identity fields — go to profile.json (long-term identity)
 _IDENTITY_FIELDS_FOR_PROFILE = ("major", "year", "target_gpa", "graduation_term")
 
+# Stated-preference fields — go to facts.json as event-style entries
+_PREFERENCE_FIELDS_AS_FACTS = {
+    "difficulty_preference": "Stated difficulty preference: {value}",
+    "recommendation_goal":   "Stated goal: {value}",
+}
 
-def _capture_hard_facts(
-    session: dict,
-    extracted: dict,
-    user_id: str,
-    mem,
-) -> None:
-    """
-    Channel A: pull every explicitly-stated fact out of `extracted` and route it.
 
-    Mutates `extracted` (pops list/identity keys so update_session() doesn't
-    redundantly process them).
+def _capture_hard_facts(session: dict, extracted: dict, user_id: str, mem) -> None:
     """
-    # ── Course status: session lists + facts.json ──
+    Channel A: pull every explicitly-stated fact out of `extracted`,
+    route it to session/profile/facts as appropriate, and emit INFO logs
+    so the operator can see what was captured.
+    """
+    # ── Course status → session lists + facts.json ──
     currently_taking = extracted.pop("currently_taking", None) or []
     completed = extracted.pop("completed", None) or []
 
     if currently_taking:
         new_courses = _merge_into_list(session, "selected_courses", currently_taking)
-        if mem.provider:
+        if new_courses and mem.provider:
             for c in new_courses:
                 mem.provider.add_fact(user_id, f"Currently taking {c}")
+            logger.info("[Channel A] currently_taking captured → %s", new_courses)
 
     if completed:
         new_courses = _merge_into_list(session, "completed_courses", completed)
-        if mem.provider:
+        if new_courses and mem.provider:
             for c in new_courses:
                 mem.provider.add_fact(user_id, f"Completed {c}")
+            logger.info("[Channel A] completed captured → %s", new_courses)
 
-    # ── Identity: long-term profile.json ──
+    # ── Identity → profile.json ──
     profile_updates = {}
     for f in _IDENTITY_FIELDS_FOR_PROFILE:
-        # `major` and `year` are also session fields — read from extracted but
-        # don't pop, so update_session() can mirror them into session state too.
+        # major/year are also session fields — read but don't pop, so
+        # update_session() can mirror them. target_gpa/graduation_term aren't
+        # session fields, so we pop to avoid them lingering in `extracted`.
         v = extracted.get(f) if f in ("major", "year") else extracted.pop(f, None)
         if v not in (None, "", []):
             profile_updates[f] = v
     if profile_updates and mem.provider:
         mem.provider.update_profile(user_id, profile_updates)
+        logger.info("[Channel A] profile updated → %s", profile_updates)
+
+    # ── Stated preferences → facts.json ──
+    for field, template in _PREFERENCE_FIELDS_AS_FACTS.items():
+        v = extracted.get(field)  # Don't pop — still want it to land in session
+        if v in (None, "", []):
+            continue
+        if mem.provider:
+            mem.provider.add_fact(user_id, template.format(value=v))
+            logger.info("[Channel A] preference fact → %s=%s", field, v)
 
 
 # ── Channel B: background reflection (every N turns) ─────
 
 async def _run_reflection_task(user_id: str, history: list[dict]) -> None:
-    """
-    Fired as a FastAPI BackgroundTask AFTER the response is sent.
-    Calls the reflection LLM, writes any new soft preferences.
-    """
+    """Fired as a FastAPI BackgroundTask AFTER the response is sent."""
     from app.llm.adapter import reflect_on_history_llm
     mem = get_memory_manager()
     if not mem.provider:
+        logger.info("[Channel B] skipped: no memory provider")
         return
     existing = mem.get_preferences(user_id)
     new_prefs = await reflect_on_history_llm(history, existing)
-    if not new_prefs:
-        return
+    logger.info(
+        "[Channel B] reflection ran (history=%d turns, existing prefs=%d) → %d new preferences: %s",
+        len(history), len(existing), len(new_prefs), new_prefs,
+    )
     for pref in new_prefs:
         mem.add_preference(user_id, pref)
 
 
-# ── LLM-output scanner for card filtering ────────────────
-
 def _course_ids_in_order(text: str) -> list[str]:
-    """Return course-like tokens in the order they appear, deduped, uppercase."""
-    seen = set()
-    result = []
+    seen, result = set(), []
     for m in _COURSE_ID_SCAN.finditer(text):
         cid = m.group().upper().replace(' ', '')
         if cid not in seen:
@@ -176,7 +181,6 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
     user_id = req.student_id or "anonymous"
     mem = get_memory_manager()
 
-    # Phase 1: initialize memory for this session (idempotent)
     mem.initialize_session(req.session_id, user_id)
 
     session = get_or_create_session(req.session_id)
@@ -186,18 +190,25 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
 
     add_message(req.session_id, "user", req.message)
 
-    # Phase 2 start: bump turn counter (no nudge text anymore)
     mem.on_turn_start(req.session_id, user_id)
+    logger.info(
+        "[turn %d] user=%s msg=%r",
+        mem.turn_count(req.session_id), user_id, req.message[:120],
+    )
 
-    # Channel A: extract hard facts and route them
+    # ── Channel A ──
     extracted = await extract_info_from_message(req.message, session)
     if extracted:
+        logger.info("[Channel A] extracted from message: %s", extracted)
         _capture_hard_facts(session, extracted, user_id, mem)
         if extracted:
             session = update_session(req.session_id, extracted)
+    else:
+        logger.info("[Channel A] nothing extracted from message")
 
     intent_result = await classify_intent(req.message)
     intent = intent_result["intent"]
+    logger.info("[intent] %s (confidence=%s)", intent, intent_result.get("confidence"))
 
     llm_entities = intent_result.get("entities", {})
     if llm_entities:
@@ -252,9 +263,12 @@ def _maybe_schedule_reflection(
     user_id: str,
     session: dict,
 ) -> None:
-    """If this turn is a reflection turn, schedule a background reflection task."""
     if mem.should_reflect(session_id):
         history_snapshot = list(session.get("history", []))[-12:]
+        logger.info(
+            "[Channel B] scheduling reflection for turn %d (history=%d msgs)",
+            mem.turn_count(session_id), len(history_snapshot),
+        )
         background_tasks.add_task(
             _run_reflection_task,
             user_id=user_id,
@@ -389,8 +403,6 @@ async def remove_from_schedule(req: ScheduleRequest):
     events = _build_schedule_events(session)
     return {"ok": True, "pending_schedule": session["pending_schedule"], "events": events}
 
-
-# ── Phase 3: Session end endpoint ────────────────────────
 
 class EndSessionRequest(BaseModel):
     session_id: str = "demo_session"

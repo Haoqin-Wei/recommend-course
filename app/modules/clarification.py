@@ -9,101 +9,79 @@ Priority order (per SKILL.md):
   3. Are selected/current courses clear?
   4. If recommending: what is the core goal?
   5. If time matters: what time slots are available?
-
-Rules:
-  - Ask 1–3 critical missing items at a time, not all at once.
-  - Use natural language, not field names.
-  - If the question only needs a single fact lookup, skip clarification.
 """
 
+import re
 from typing import Optional
 
 
-def detect_missing_fields(
-    session_state: dict,
-    intent: str,
-) -> list[dict]:
-    """
-    Given current session state and intent type, return a list of
-    missing fields ordered by priority.
+# Used by the keyword fallback to find course IDs in a message.
+_COURSE_ID = re.compile(r'\b[A-Z][A-Z0-9]{1,7}\d+[A-Z]?\b', re.IGNORECASE)
 
-    Each item: {"field": str, "priority": int, "question": str}
-    """
+
+def detect_missing_fields(session_state: dict, intent: str) -> list[dict]:
     missing = []
 
     if not session_state.get("term"):
         missing.append({
-            "field": "term",
-            "priority": 1,
+            "field": "term", "priority": 1,
             "question": "Which term are you looking at? (e.g., Fall 2025, Winter 2026)",
         })
 
     if not session_state.get("major"):
         missing.append({
-            "field": "major",
-            "priority": 2,
+            "field": "major", "priority": 2,
             "question": "What's your major? That'll help me find courses that count toward your requirements.",
         })
 
     if intent == "course_recommendation":
         if not session_state.get("selected_courses"):
             missing.append({
-                "field": "selected_courses",
-                "priority": 3,
+                "field": "selected_courses", "priority": 3,
                 "question": "Do you have any courses already on your schedule? I can help avoid time conflicts.",
             })
-
         if not session_state.get("recommendation_goal"):
             missing.append({
-                "field": "recommendation_goal",
-                "priority": 4,
+                "field": "recommendation_goal", "priority": 4,
                 "question": "What matters most to you — satisfying major requirements, finding easier courses, or getting a good professor?",
             })
-
         if not session_state.get("preferred_time"):
-            # Only ask if the question involves scheduling
             missing.append({
-                "field": "preferred_time",
-                "priority": 5,
+                "field": "preferred_time", "priority": 5,
                 "question": "Any time preferences? (e.g., mornings only, no Friday classes)",
             })
 
-    # Sort by priority, return top items
     missing.sort(key=lambda x: x["priority"])
     return missing
 
 
 def needs_clarification(session_state: dict, intent: str) -> bool:
-    """
-    Check if we have enough info to proceed.
-    For single_query intent, we usually don't need full profile.
-    For course_recommendation, we need at least term + major.
-    """
     if intent == "single_query":
-        return False  # Single-point queries can proceed without full profile
-
-    # For recommendations, require at least term and major
+        return False
     if not session_state.get("term") or not session_state.get("major"):
         return True
-
     return False
 
 
 def build_clarification_response(missing_fields: list[dict], max_questions: int = 3) -> str:
-    """
-    Build a natural-language clarification message.
-    Per SKILL.md: ask 1–3 critical items, natural tone.
-    """
     to_ask = missing_fields[:max_questions]
-
     if len(to_ask) == 1:
         return f"Before I can help, one quick question — {to_ask[0]['question']}"
-
     lines = ["I'd love to help! A few quick questions first:\n"]
     for i, item in enumerate(to_ask, 1):
         lines.append(f"{i}. {item['question']}")
-
     return "\n".join(lines)
+
+
+# Fields the LLM extractor returns that we forward to the caller.
+# Scalars: caught by update_session(). Lists: caught by chat._capture_hard_facts().
+_FORWARDED_FIELDS = (
+    # Scalars
+    "term", "major", "year", "target_gpa", "graduation_term",
+    "difficulty_preference", "recommendation_goal",
+    # Lists
+    "currently_taking", "completed",
+)
 
 
 async def extract_info_from_message(message: str, session_state: dict) -> dict:
@@ -111,35 +89,32 @@ async def extract_info_from_message(message: str, session_state: dict) -> dict:
     Extract key fields from a user message.
 
     Strategy:
-      1. Try LLM extraction (accurate, handles natural phrasing)
-      2. Fall back to keyword matching if LLM is unavailable
+      1. Try LLM extraction (handles natural phrasing well, distinguishes
+         "I'm taking X" vs "I took X" vs "tell me about X").
+      2. Fall back to keyword matching if LLM is unavailable OR returns
+         nothing useful — keyword fallback now also handles currently_taking
+         and completed via simple verb-near-course-ID heuristics.
     """
     from app.llm.adapter import extract_info_llm
 
-    # ── Try LLM first ────────────────────────────────────
     llm_result = await extract_info_llm(message)
     if llm_result:
         updates = {}
-        if llm_result.get("term"):
-            updates["term"] = llm_result["term"]
-        if llm_result.get("major"):
-            updates["major"] = llm_result["major"]
-        if llm_result.get("difficulty_preference"):
-            updates["difficulty_preference"] = llm_result["difficulty_preference"]
-        if llm_result.get("recommendation_goal"):
-            updates["recommendation_goal"] = llm_result["recommendation_goal"]
+        for field in _FORWARDED_FIELDS:
+            v = llm_result.get(field)
+            # Skip empty values (None, "", [], 0 — but keep target_gpa numerical 0... unlikely)
+            if v in (None, "", []):
+                continue
+            updates[field] = v
         if updates:
             return updates
+        # LLM returned a dict but no useful fields — fall through to keyword fallback
 
-    # ── Keyword fallback ──────────────────────────────────
     return _extract_info_keyword(message)
 
 
 def _extract_info_keyword(message: str) -> dict:
-    """
-    Keyword-based field extraction (original demo logic).
-    Used when LLM is unavailable.
-    """
+    """Keyword-based field extraction (used when LLM is unavailable or empty)."""
     updates = {}
     msg_lower = message.lower()
 
@@ -157,8 +132,7 @@ def _extract_info_keyword(message: str) -> dict:
 
     # ── Major detection ───────────────────────────────────
     major_map = {
-        "computer science": "Computer Science",
-        "cs": "Computer Science",
+        "computer science": "Computer Science", "cs": "Computer Science",
         "compsci": "Computer Science",
         "informatics": "Informatics",
         "data science": "Data Science",
@@ -168,13 +142,12 @@ def _extract_info_keyword(message: str) -> dict:
             updates["major"] = val
             break
 
-    # ── Difficulty preference ─────────────────────────────
+    # ── Difficulty / goal ─────────────────────────────────
     if any(w in msg_lower for w in ["easy", "chill", "light", "simple", "gpa boost"]):
         updates["difficulty_preference"] = "easy"
     elif any(w in msg_lower for w in ["challenging", "hard", "rigorous"]):
         updates["difficulty_preference"] = "hard"
 
-    # ── Goal detection ────────────────────────────────────
     if any(w in msg_lower for w in ["major requirement", "satisfy requirement", "count toward"]):
         updates["recommendation_goal"] = "major_requirement"
     elif any(w in msg_lower for w in ["easy", "boost gpa", "light"]):
@@ -183,5 +156,31 @@ def _extract_info_keyword(message: str) -> dict:
         updates["recommendation_goal"] = "professor_quality"
     elif any(w in msg_lower for w in ["ge", "general education"]):
         updates["recommendation_goal"] = "ge_fulfillment"
+
+    # ── Course-status detection (NEW) ─────────────────────
+    # Walk every course-ID match. If a status verb appears within 30 chars
+    # before the match, classify it. "I'm taking STAT67" → currently_taking.
+    taking_verbs = ("taking", "in ", "currently in", "enrolled in", "正在上")
+    completed_verbs = ("took", "passed", "finished", "completed", "已修过", "已修", "上过")
+
+    for m in _COURSE_ID.finditer(message):
+        cid = m.group().upper()
+        start = max(0, m.start() - 30)
+        before = msg_lower[start:m.start()]
+        if any(v in before for v in taking_verbs):
+            updates.setdefault("currently_taking", []).append(cid)
+        elif any(v in before for v in completed_verbs):
+            updates.setdefault("completed", []).append(cid)
+
+    # Dedup the lists
+    for k in ("currently_taking", "completed"):
+        if k in updates:
+            seen = set()
+            deduped = []
+            for c in updates[k]:
+                if c not in seen:
+                    seen.add(c)
+                    deduped.append(c)
+            updates[k] = deduped
 
     return updates

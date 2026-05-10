@@ -2,23 +2,10 @@
 LLM Adapter — DeepSeek via OpenAI-compatible SDK
 
 Public functions:
-  1. classify_intent_llm()      — intent + entity extraction in one call
-  2. extract_info_llm()         — Channel A: hard-fact extraction every turn
-  3. generate_answer_llm()      — natural-language answer generation
-  4. reflect_on_history_llm()   — Channel B: periodic pattern reflection (background)
-
-Channel A vs Channel B
-    A (extract_info_llm): runs every turn, captures things the user EXPLICITLY
-      said — course enrollment, identity, target GPA, etc. Goes straight into
-      session state and long-term memory.
-    B (reflect_on_history_llm): runs every N turns in a background task,
-      reviews the recent conversation, infers SOFT patterns / preferences
-      (which the user did not explicitly state) and persists them.
-
-Configuration via env vars:
-    DEEPSEEK_API_KEY   — required to enable LLM (otherwise rule-based fallback)
-    DEEPSEEK_MODEL     — default 'deepseek-v4-flash'
-    DEEPSEEK_BASE_URL  — default 'https://api.deepseek.com'
+  1. classify_intent_llm()
+  2. extract_info_llm()         — Channel A
+  3. generate_answer_llm()
+  4. reflect_on_history_llm()   — Channel B
 """
 
 import os
@@ -80,7 +67,7 @@ Return ONLY a JSON object with these fields (use null or [] if not mentioned):
 {
   "term": "Fall 2025" | "Winter 2026" | etc. | null,
   "major": "Computer Science" | "Informatics" | "Data Science" | etc. | null,
-  "year": "freshman" | "sophomore" | "junior" | "senior" | "1st year" | "2nd year" | "3rd year" | "4th year" | null,
+  "year": "freshman" | "sophomore" | "junior" | "senior" | null,
   "target_gpa": number (e.g. 3.7) | null,
   "graduation_term": "Spring 2027" | etc. | null,
   "difficulty_preference": "easy" | "hard" | null,
@@ -131,28 +118,31 @@ Style rules:
 """
 
 REFLECTION_SYSTEM_PROMPT = """\
-You observe a UCI course advisor's conversation with a student. Your sole job
-is to spot NEW long-term SOFT preferences or patterns that should be remembered
-across future sessions.
+You observe a UCI course advisor's conversation with a student. Your job is to
+extract any soft preferences worth remembering across future sessions.
 
-Look for IMPLICIT signals:
-- Repeated topics or kinds of courses the student keeps asking about
-- Implicit values (asks RMP scores often → cares about prof quality)
-- Scheduling preferences hinted at across multiple turns ("morning bad" twice)
-- Decision-making style ("always asks workload before deciding")
-- What the student avoids or pushes back on
+Capture things like:
+- Stated likes/dislikes about course style ("I like easy courses", "I prefer \
+project-based classes")
+- Scheduling habits ("I avoid mornings", "Friday off")
+- Decision-making patterns ("Always asks workload before committing", "Cares \
+a lot about RMP scores")
+- Topic interests ("Keeps asking about ML / databases / AI")
+- Anything else that would help a future session personalize advice
+
+Even single-mention preferences are worth recording — better to capture and let
+deduplication handle it later than to miss it. Just stay short and concrete.
 
 DO NOT capture:
 - Hard facts already extracted on every turn (major, year, currently_taking, \
-completed, target_gpa, graduation_term, difficulty_preference, recommendation_goal)
-- Things the student stated only ONCE without it being a pattern
-- Anything already in the existing-preferences list
+completed, target_gpa, graduation_term — these have their own pipeline)
+- Anything already in the existing-preferences list (don't restate)
 
 Return ONLY a JSON object in this exact shape:
 {"preferences": ["short pref under 80 chars", "...", ...]}
 
-If nothing genuinely NEW and pattern-worthy emerges: {"preferences": []}
-Maximum 3 preferences per call. Each must be a single short sentence.
+If genuinely nothing new: {"preferences": []}
+Maximum 3 preferences per call. Each preference must be one short sentence.
 """
 
 
@@ -163,7 +153,6 @@ async def _call_llm(
     user_content: str,
     json_mode: bool = False,
 ) -> str:
-    """Single LLM call via DeepSeek's OpenAI-compatible Chat Completions API."""
     client = _get_client()
     kwargs = {
         "model": LLM_MODEL,
@@ -226,7 +215,17 @@ async def extract_info_llm(user_message: str) -> Optional[dict]:
         return None
     try:
         raw = await _call_llm(EXTRACTION_SYSTEM_PROMPT, user_message, json_mode=True)
-        return _parse_json_response(raw)
+        result = _parse_json_response(raw)
+        # Log non-empty fields so the operator can see what the LLM picked up.
+        if result:
+            non_empty = {k: v for k, v in result.items() if v not in (None, "", [])}
+            if non_empty:
+                logger.info("[Channel A] LLM extracted: %s", non_empty)
+            else:
+                logger.info("[Channel A] LLM returned all-empty extraction")
+        else:
+            logger.info("[Channel A] LLM extraction returned None")
+        return result
     except Exception as e:
         logger.error("extract_info_llm failed: %s", e)
         return None
@@ -258,17 +257,14 @@ async def reflect_on_history_llm(
     history: list[dict],
     existing_preferences: list[str],
 ) -> list[str]:
-    """
-    Channel B: review recent turns and extract NEW soft preferences.
-
-    Runs as a background task — independent of the user-facing answer call.
-    Returns a list of short preference strings (already deduped against
-    `existing_preferences` by the LLM).
-    """
-    if not LLM_ENABLED or not history:
+    """Channel B: extract NEW soft preferences from recent turns."""
+    if not LLM_ENABLED:
+        logger.info("[Channel B] skipped: LLM disabled")
+        return []
+    if not history:
+        logger.info("[Channel B] skipped: empty history")
         return []
     try:
-        # Format last ~10 messages as a transcript
         recent = history[-10:]
         transcript_lines = []
         for m in recent:
@@ -288,11 +284,16 @@ async def reflect_on_history_llm(
             f"EXISTING PREFERENCES (do not repeat any of these):\n{existing_block}\n\n"
             f"RECENT CONVERSATION:\n{transcript}"
         )
+        logger.info(
+            "[Channel B] running reflection (%d messages, %d existing preferences)",
+            len(transcript_lines), len(existing_preferences),
+        )
         raw = await _call_llm(REFLECTION_SYSTEM_PROMPT, user_content, json_mode=True)
         result = _parse_json_response(raw)
         if isinstance(result, dict):
             prefs = result.get("preferences", [])
-            return [str(p).strip() for p in prefs if p and str(p).strip()]
+            cleaned = [str(p).strip() for p in prefs if p and str(p).strip()]
+            return cleaned
         return []
     except Exception as e:
         logger.error("reflect_on_history_llm failed: %s", e)
@@ -302,7 +303,6 @@ async def reflect_on_history_llm(
 # ── Internal helpers ─────────────────────────────────────
 
 def _build_system_prompt(memory_context: Optional[dict]) -> str:
-    """Compose ANSWER_SYSTEM_PROMPT + persistent profile (no inline nudge anymore)."""
     if not memory_context:
         return ANSWER_SYSTEM_PROMPT
     parts = [ANSWER_SYSTEM_PROMPT]
