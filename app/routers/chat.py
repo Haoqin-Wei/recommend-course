@@ -14,6 +14,13 @@ Two-channel memory architecture:
         FastAPI BackgroundTasks fires _run_reflection_task(). That task
         spawns an independent LLM call for SOFT pattern detection.
 
+Validation (Phase 1):
+    After generate_answer_llm() returns, the answer is run through the
+    Phase 1 validator suite (course_exists / instructor / offered_term /
+    consistency). Hallucinated course IDs and unknown professors get
+    annotated as footer issues. validation_report is attached to
+    ChatResponse for inspection.
+
 Logging:
     INFO-level logs at every capture and reflection step so the operator
     can watch the memory pipeline live in the uvicorn terminal.
@@ -45,6 +52,14 @@ from app.modules.answer import (
 from app.modules.followup import generate_followups, generate_single_query_followups
 from app.memory import get_memory_manager
 
+# ── Validation Phase 1 ───────────────────────────────────
+from app.catalog.term import Term, get_term_registry
+from app.catalog.cache import get_catalog
+from app.validation import (
+    ValidationContext, validate, decide_action, apply_report, write_log,
+)
+# ─────────────────────────────────────────────────────────
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -60,6 +75,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = "demo_session"
     student_id: Optional[str] = "demo_001"
+    term: Optional[str] = None                          # 新增
 
 
 class ChatResponse(BaseModel):
@@ -69,6 +85,7 @@ class ChatResponse(BaseModel):
     intent: str = ""
     session_state: dict = {}
     pending_schedule: list[dict] = []
+    validation_report: Optional[dict] = None            # 新增
 
 
 # ── Channel A: hard-fact capture (every turn) ────────────
@@ -125,9 +142,6 @@ def _capture_hard_facts(session: dict, extracted: dict, user_id: str, mem) -> No
     # ── Identity → profile.json ──
     profile_updates = {}
     for f in _IDENTITY_FIELDS_FOR_PROFILE:
-        # major/year are also session fields — read but don't pop, so
-        # update_session() can mirror them. target_gpa/graduation_term aren't
-        # session fields, so we pop to avoid them lingering in `extracted`.
         v = extracted.get(f) if f in ("major", "year") else extracted.pop(f, None)
         if v not in (None, "", []):
             profile_updates[f] = v
@@ -137,7 +151,7 @@ def _capture_hard_facts(session: dict, extracted: dict, user_id: str, mem) -> No
 
     # ── Stated preferences → facts.json ──
     for field, template in _PREFERENCE_FIELDS_AS_FACTS.items():
-        v = extracted.get(field)  # Don't pop — still want it to land in session
+        v = extracted.get(field)
         if v in (None, "", []):
             continue
         if mem.provider:
@@ -242,18 +256,27 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
                             session_state=get_known_fields(req.session_id))
 
     state = get_known_fields(req.session_id)
+    validation_dict = None                              # 新增：默认 None
+
     if intent == "single_query":
         reply, cards, followups = await _handle_single_query(req.message, state, memory_context)
     else:
-        reply, cards, followups = await _handle_recommendation(req.message, state, memory_context)
+        # ── 新增：把 session_id / term 传进去，接收 validation_dict ──
+        reply, cards, followups, validation_dict = await _handle_recommendation(
+            req.message, state, memory_context,
+            session_id=req.session_id, term_str=req.term,
+        )
 
     add_message(req.session_id, "assistant", reply)
     mem.sync_turn(user_id, req.message, reply, req.session_id)
     _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
 
-    return ChatResponse(reply=reply, cards=cards, followups=followups,
-                        intent=intent, session_state=state,
-                        pending_schedule=session.get("pending_schedule", []))
+    return ChatResponse(
+        reply=reply, cards=cards, followups=followups,
+        intent=intent, session_state=state,
+        pending_schedule=session.get("pending_schedule", []),
+        validation_report=validation_dict,              # 新增
+    )
 
 
 def _maybe_schedule_reflection(
@@ -308,7 +331,13 @@ def _build_card(item: dict, state: dict) -> dict:
     }
 
 
-async def _handle_recommendation(user_msg, state, memory_context=None):
+async def _handle_recommendation(
+    user_msg,
+    state,
+    memory_context=None,
+    session_id=None,                                    # 新增
+    term_str=None,                                      # 新增
+):
     from app.llm.adapter import generate_answer_llm
     results = query_course_recommendations(
         term=state.get("term", "Fall 2025"), major=state.get("major"),
@@ -332,8 +361,52 @@ async def _handle_recommendation(user_msg, state, memory_context=None):
         answer = generate_recommendation_answer(results, state)
         cards = [_build_card(i, state) for i in results.get("primary", [])]
 
+    # ── Validation Phase 1 ─────────────────────────────────
+    # Pick a target term in order of priority:
+    #   1. req.term (frontend explicit)
+    #   2. state["term"] (session state)
+    #   3. registry.default() (latest loaded term — demo fallback)
+    validation_dict = None
+    target_term = (
+        Term.parse(term_str or "")
+        or Term.parse(state.get("term", ""))
+    )
+    catalog = get_catalog(target_term) if target_term else None
+    # Demo fallback: when the asked term has no loaded data, use whatever
+    # term IS loaded. Remove this fallback once you have multi-term data.
+    if catalog is None:
+        fallback_term = get_term_registry().default()
+        if fallback_term:
+            catalog = get_catalog(fallback_term)
+            if catalog:
+                logger.info(
+                    "[validation] term %r has no data; falling back to %s",
+                    state.get("term"), fallback_term.term_id,
+                )
+
+    if catalog and answer:
+        ctx = ValidationContext(
+            llm_answer=answer,
+            retrieved=results,
+            catalog=catalog,
+            session_state=state,
+            user_message=user_msg,
+        )
+        report = validate(ctx)
+        action = decide_action(report)
+        answer, cards, changed = apply_report(answer, cards, report, action)
+        write_log(ctx, report, action, changed, session_id=session_id)
+        validation_dict = report.to_dict()
+        logger.info(
+            "[validation] overall=%s errors=%d warnings=%d action=%s",
+            report.overall, len(report.errors), len(report.warnings), action.value,
+        )
+    else:
+        logger.info("[validation] skipped (no catalog or no answer)")
+    # ───────────────────────────────────────────────────────
+
     followups = generate_followups(results, state, "course_recommendation")
-    return answer, cards, followups
+    return answer, cards, followups, validation_dict
 
 
 async def _handle_single_query(message, state, memory_context=None):
