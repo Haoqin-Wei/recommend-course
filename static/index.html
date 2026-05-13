@@ -859,6 +859,232 @@ input { font-family: inherit; }
     z-index: 50;
   }
 }
+
+/* ═══════════════════════════════════════════════════════
+   ADDITIONS: stop button, settings modal, validation footer
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Topbar gear icon ─────────────────────────────────── */
+.topbar-icon-btn {
+  padding: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.topbar-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  opacity: 0.9;
+}
+
+/* ── Streaming cursor (shown while LLM is generating) ── */
+.msg-ai-body.streaming::after {
+  content: '▌';
+  color: var(--accent);
+  margin-left: 2px;
+  animation: cursor-pulse 0.85s ease-in-out infinite;
+  font-weight: var(--weight-medium);
+}
+@keyframes cursor-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.25; }
+}
+
+/* ── Stop button ─────────────────────────────────────── */
+.stop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-secondary-size);
+  font-weight: var(--weight-medium);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition);
+  height: 100%;
+}
+.stop-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+.stop-btn svg {
+  color: var(--accent);
+}
+
+/* ── Modal backdrop / panel ──────────────────────────── */
+.modal-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 200;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  backdrop-filter: blur(2px);
+}
+.modal-backdrop.open {
+  display: flex;
+}
+.modal-panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  width: 100%;
+  max-width: 680px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.modal-title {
+  font-size: var(--text-body);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+  flex: 1;
+}
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.modal-body {
+  padding: var(--space-4) var(--space-5);
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.modal-hint {
+  font-size: var(--text-label);
+  color: var(--text-tertiary);
+  line-height: 1.55;
+  margin: 0;
+}
+.modal-hint em {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+.modal-textarea {
+  width: 100%;
+  min-height: 240px;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  padding: var(--space-3);
+  resize: vertical;
+  outline: none;
+}
+.modal-textarea:focus {
+  border-color: var(--accent);
+}
+.modal-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.modal-footer {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  align-items: center;
+}
+.modal-footer-spacer { flex: 1; }
+.modal-btn {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-secondary-size);
+  font-weight: var(--weight-medium);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+.modal-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.modal-btn-primary {
+  background: var(--accent-medium);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.modal-btn-primary:hover {
+  background: var(--accent);
+  color: #0a1a2e;
+}
+.modal-btn-ghost {
+  border-color: transparent;
+  color: var(--text-tertiary);
+}
+.modal-btn-ghost:hover {
+  border-color: var(--border-default);
+}
+
+/* ── Validation footer (inside AI message) ───────────── */
+.validation-footer {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px dashed var(--border-default);
+  font-size: var(--text-label);
+  color: var(--text-tertiary);
+}
+.validation-footer-header {
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-1);
+  letter-spacing: 0.02em;
+}
+.validation-issue {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  line-height: 1.55;
+  padding: 2px 0;
+}
+.validation-issue-icon {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+.validation-issue-error    .validation-issue-icon { color: #f08080; }
+.validation-issue-warn     .validation-issue-icon { color: #e4b261; }
+.validation-issue-info     .validation-issue-icon { color: var(--accent); }
+.validation-issue code {
+  background: var(--bg-elevated);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
 </style>
 </head>
 <body>
@@ -873,12 +1099,18 @@ input { font-family: inherit; }
   </div>
   <div class="topbar-sep"></div>
   <select class="term-select" id="termSelect">
-    <option value="Fall 2025" selected>Fall 2025</option>
-    <option value="Winter 2026">Winter 2026</option>
-    <option value="Spring 2026">Spring 2026</option>
+    <option value="" disabled selected>Loading terms…</option>
   </select>
   <div class="topbar-right">
     <div class="topbar-status"><span class="dot"></span>System ready</div>
+    <button class="topbar-btn topbar-icon-btn" id="settingsBtn"
+            onclick="openSettings()" title="System prompt &amp; settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+           stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
     <button class="topbar-btn" id="toggleScheduleBtn" onclick="toggleSchedule()">Schedule</button>
   </div>
 </div>
@@ -942,6 +1174,12 @@ input { font-family: inherit; }
                placeholder="Ask about courses, professors, or schedule…"
                autocomplete="off">
         <button class="send-btn" id="sendBtn" onclick="sendMessage()">Send</button>
+        <button class="stop-btn" id="stopBtn" onclick="stopGeneration()" style="display:none">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+            <rect x="6" y="6" width="12" height="12" rx="1.5"></rect>
+          </svg>
+          Stop
+        </button>
       </div>
     </div>
   </main>
@@ -961,6 +1199,33 @@ input { font-family: inherit; }
 
 </div>
 
+<!-- ═══ SETTINGS MODAL ════════════════════════════════ -->
+<div class="modal-backdrop" id="settingsModal" onclick="closeSettings(event)">
+  <div class="modal-panel" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <div class="modal-title">System Prompt</div>
+      <button class="modal-close" onclick="closeSettings()">&#x2715;</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-hint">
+        Override the default system prompt sent to the LLM for recommendations.
+        Leave the textarea empty (and click <em>Save</em>) to fall back to the backend default.
+      </p>
+      <textarea class="modal-textarea" id="promptTextarea"
+                placeholder="Loading default prompt…"
+                spellcheck="false"></textarea>
+      <div class="modal-meta" id="promptMeta">&nbsp;</div>
+    </div>
+    <div class="modal-footer">
+      <button class="modal-btn modal-btn-ghost" onclick="loadDefaultPrompt()">Load default</button>
+      <button class="modal-btn modal-btn-ghost" onclick="clearPrompt()">Clear</button>
+      <div class="modal-footer-spacer"></div>
+      <button class="modal-btn modal-btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="modal-btn modal-btn-primary" onclick="savePrompt()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = '';
 const SID = 'demo_session';
@@ -969,6 +1234,11 @@ let scheduleEvents = [];
 let scheduleOpen = false;
 let colorIndex = 0;
 const courseColors = {};
+
+/* ── Settings / generation state ───────────────────── */
+let currentAbortController = null;   // active fetch controller (null when idle)
+let defaultSystemPrompt = '';        // populated by /api/system_prompt
+const PROMPT_STORAGE_KEY = 'zotadvisor.systemPrompt';
 
 const COLORS = [
   ['#5b9eff', 'rgba(91, 158, 255, 0.12)'],
@@ -992,33 +1262,219 @@ inputEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 
+/* ── Boot: populate terms dropdown + cache default prompt ── */
+async function loadTerms() {
+  const select = document.getElementById('termSelect');
+  try {
+    const res = await fetch(`${API}/api/terms`);
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const data = await res.json();
+    const terms = data.terms || [];
+    const def = data.default || (terms.length ? terms[0] : '');
+    if (!terms.length) {
+      select.innerHTML = '<option value="" disabled selected>No terms loaded</option>';
+      return;
+    }
+    select.innerHTML = terms.map(t =>
+      `<option value="${escAttr(t)}"${t === def ? ' selected' : ''}>${escHTML(t)}</option>`
+    ).join('');
+  } catch (err) {
+    console.warn('Failed to load /api/terms — falling back to static list', err);
+    select.innerHTML = `
+      <option value="Spring 2025" selected>Spring 2025</option>
+      <option value="Spring 2026">Spring 2026</option>
+    `;
+  }
+}
+
+async function loadDefaultPromptFromAPI() {
+  try {
+    const res = await fetch(`${API}/api/system_prompt`);
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const data = await res.json();
+    defaultSystemPrompt = data.prompt || '';
+  } catch (err) {
+    console.warn('Failed to load /api/system_prompt — custom prompts can still be set manually', err);
+    defaultSystemPrompt = '';
+  }
+}
+
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function getActivePrompt() {
+  return localStorage.getItem(PROMPT_STORAGE_KEY) || '';
+}
+
+/* ── Send / Stop ───────────────────────────────────── */
 async function sendMessage(text) {
   const msg = text || inputEl.value.trim();
   if (!msg) return;
+  if (currentAbortController) return;   // already generating
+
   inputEl.value = '';
 
   const wf = document.getElementById('welcomeFollowups');
   if (wf) wf.remove();
 
   appendUser(msg);
-  const typing = appendTyping();
-  document.getElementById('sendBtn').disabled = true;
+  toggleSendStop(true);
+
+  currentAbortController = new AbortController();
+
+  // Build request payload
+  const term = document.getElementById('termSelect').value || null;
+  const customPrompt = getActivePrompt();
+  const payload = { message: msg, session_id: SID };
+  if (term) payload.term = term;
+  if (customPrompt) payload.system_prompt = customPrompt;
+
+  // Create the AI message bubble up-front; tokens stream into its body.
+  const aiMsg = startAiMessage();
+
+  let fullText = '';
+  let meta = null;
+  let stopped = false;
 
   try {
-    const res = await fetch(`${API}/api/chat`, {
+    const res = await fetch(`${API}/api/chat/stream`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ message: msg, session_id: SID }),
+      body: JSON.stringify(payload),
+      signal: currentAbortController.signal,
     });
-    const data = await res.json();
-    typing.remove();
-    appendAI(data);
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+
+      // SSE events are separated by a blank line ("\n\n")
+      let sepIdx;
+      while ((sepIdx = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, sepIdx);
+        buffer = buffer.slice(sepIdx + 2);
+        if (!block.startsWith('data: ')) continue;
+        const payload = block.slice(6);
+        let event;
+        try { event = JSON.parse(payload); }
+        catch (e) { console.warn('SSE parse error:', payload); continue; }
+
+        if (event.type === 'token') {
+          fullText += event.text;
+          appendStreamingToken(aiMsg, event.text);
+        } else if (event.type === 'meta') {
+          meta = event;
+        } else if (event.type === 'error') {
+          console.error('Stream error event:', event.message);
+          fullText += `\n\n_(server error: ${event.message})_`;
+          appendStreamingToken(aiMsg, ''); // trigger re-scroll
+        } else if (event.type === 'done') {
+          // explicit termination — finalize below
+        }
+      }
+    }
   } catch (err) {
-    typing.remove();
-    appendAI({ reply: 'Connection error — is the backend running?', cards: [], followups: [] });
+    if (err.name === 'AbortError') {
+      stopped = true;
+      fullText += fullText ? '\n\n_(generation stopped)_' : '_(generation stopped)_';
+    } else {
+      console.error('chat stream failed:', err);
+      fullText = fullText || 'Connection error — is the backend running?';
+    }
+  } finally {
+    finalizeAiMessage(aiMsg, fullText, meta || {}, stopped);
+    currentAbortController = null;
+    toggleSendStop(false);
+    inputEl.focus();
   }
-  document.getElementById('sendBtn').disabled = false;
-  inputEl.focus();
+}
+
+function stopGeneration() {
+  if (currentAbortController) {
+    currentAbortController.abort();
+  }
+}
+
+function toggleSendStop(isGenerating) {
+  const sendBtn = document.getElementById('sendBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  if (isGenerating) {
+    sendBtn.style.display = 'none';
+    stopBtn.style.display = 'inline-flex';
+    sendBtn.disabled = true;
+  } else {
+    sendBtn.style.display = '';
+    stopBtn.style.display = 'none';
+    sendBtn.disabled = false;
+  }
+}
+
+/* ── AI message bubble: streaming + finalize ──────── */
+function startAiMessage() {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg msg-ai';
+  wrap.innerHTML = '<div class="msg-ai-label">Advisor</div>'
+                 + '<div class="msg-ai-body streaming"></div>';
+  document.getElementById('chatScroll').appendChild(wrap);
+  scrollChat();
+  return wrap;
+}
+
+function appendStreamingToken(wrap, text) {
+  // During streaming, accumulate as text (plain). Markdown is rendered
+  // once at the end. textContent is fast and safe (no XSS surface).
+  const body = wrap.querySelector('.msg-ai-body');
+  body.textContent += text;
+  scrollChat();
+}
+
+function finalizeAiMessage(wrap, fullText, meta, stopped) {
+  const body = wrap.querySelector('.msg-ai-body');
+  body.classList.remove('streaming');
+  body.innerHTML = formatMarkdown(fullText || '');
+
+  // Cards
+  if (meta.cards && meta.cards.length > 0) {
+    const cardsDiv = document.createElement('div');
+    cardsDiv.className = 'cards-row';
+    let cardsHtml = '';
+    for (const card of meta.cards) cardsHtml += renderCard(card);
+    cardsDiv.innerHTML = cardsHtml;
+    wrap.appendChild(cardsDiv);
+  }
+
+  // Followups
+  if (!stopped && meta.followups && meta.followups.length > 0) {
+    const fuDiv = document.createElement('div');
+    fuDiv.className = 'followups';
+    let fuHtml = '';
+    for (const fu of meta.followups) {
+      fuHtml += `<button class="followup-chip" onclick="sendMessage(\`${fu.replace(/`/g,"'")}\`)">${escHTML(fu)}</button>`;
+    }
+    fuDiv.innerHTML = fuHtml;
+    wrap.appendChild(fuDiv);
+  }
+
+  // Validation footer
+  if (!stopped && meta.validation_report
+      && Array.isArray(meta.validation_report.issues)
+      && meta.validation_report.issues.length > 0) {
+    const vDiv = document.createElement('div');
+    vDiv.innerHTML = renderValidationFooter(meta.validation_report);
+    wrap.appendChild(vDiv.firstElementChild);
+  }
+
+  scrollChat();
 }
 
 function appendUser(text) {
@@ -1061,9 +1517,34 @@ function appendAI(data) {
     html += '</div>';
   }
 
+  // Validation footer (Phase 1 backend feature)
+  if (data.validation_report && Array.isArray(data.validation_report.issues)
+      && data.validation_report.issues.length > 0) {
+    html += renderValidationFooter(data.validation_report);
+  }
+
   wrap.innerHTML = html;
   document.getElementById('chatScroll').appendChild(wrap);
   scrollChat();
+}
+
+function renderValidationFooter(report) {
+  const ICONS = { error: '⚠', warn: '⚠', info: 'ℹ' };
+  const issues = report.issues || [];
+  let html = '<div class="validation-footer">';
+  html += `<div class="validation-footer-header">🔍 Data check  ·  ${issues.length} issue${issues.length === 1 ? '' : 's'}</div>`;
+  for (const issue of issues) {
+    const sev = (issue.severity || 'info').toLowerCase();
+    const icon = ICONS[sev] || '·';
+    html += `<div class="validation-issue validation-issue-${escAttr(sev)}">`;
+    html += `<div class="validation-issue-icon">${icon}</div>`;
+    html += `<div class="validation-issue-msg">`;
+    if (issue.code) html += `<code>${escHTML(issue.code)}</code> `;
+    html += escHTML(issue.message || '');
+    html += `</div></div>`;
+  }
+  html += '</div>';
+  return html;
 }
 
 function renderCard(card) {
@@ -1306,6 +1787,79 @@ function scrollChat() {
   const el = document.getElementById('chatScroll');
   requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
 }
+
+/* ── Settings modal ────────────────────────────────── */
+function openSettings() {
+  const modal = document.getElementById('settingsModal');
+  const ta = document.getElementById('promptTextarea');
+  const stored = getActivePrompt();
+  ta.value = stored;
+  ta.placeholder = defaultSystemPrompt
+    ? '(empty — using backend default)'
+    : 'Backend default unavailable. Enter custom prompt to override.';
+  updatePromptMeta();
+  modal.classList.add('open');
+  setTimeout(() => ta.focus(), 50);
+}
+
+function closeSettings(ev) {
+  // Allow click-on-backdrop to close, but not stray clicks bubbling up.
+  if (ev && ev.type === 'click' && ev.target.id !== 'settingsModal') return;
+  document.getElementById('settingsModal').classList.remove('open');
+}
+
+function loadDefaultPrompt() {
+  const ta = document.getElementById('promptTextarea');
+  if (!defaultSystemPrompt) {
+    ta.value = '';
+    document.getElementById('promptMeta').textContent =
+      'Default unavailable — leave empty to use whatever the backend chooses.';
+    return;
+  }
+  ta.value = defaultSystemPrompt;
+  updatePromptMeta();
+}
+
+function clearPrompt() {
+  document.getElementById('promptTextarea').value = '';
+  updatePromptMeta();
+}
+
+function savePrompt() {
+  const v = document.getElementById('promptTextarea').value.trim();
+  if (v) {
+    localStorage.setItem(PROMPT_STORAGE_KEY, v);
+  } else {
+    localStorage.removeItem(PROMPT_STORAGE_KEY);
+  }
+  closeSettings();
+}
+
+function updatePromptMeta() {
+  const v = document.getElementById('promptTextarea').value;
+  const meta = document.getElementById('promptMeta');
+  const chars = v.length;
+  const lines = v ? v.split('\n').length : 0;
+  const status = v ? `${chars} chars · ${lines} lines` : '(empty — will use backend default)';
+  meta.textContent = status;
+}
+
+document.getElementById('promptTextarea').addEventListener('input', updatePromptMeta);
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const m = document.getElementById('settingsModal');
+    if (m.classList.contains('open')) closeSettings();
+  }
+});
+
+/* ── Boot ──────────────────────────────────────────── */
+(async function init() {
+  await Promise.all([
+    loadTerms(),
+    loadDefaultPromptFromAPI(),
+  ]);
+})();
 </script>
 
 </body>

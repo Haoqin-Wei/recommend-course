@@ -11,7 +11,8 @@ Public functions:
 import os
 import json
 import logging
-from typing import Optional
+import asyncio
+from typing import Optional, AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +27,11 @@ _client = None
 
 
 def _get_client():
+    """Return a process-wide AsyncOpenAI client. Created lazily."""
     global _client
     if _client is None:
-        from openai import OpenAI
-        _client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
+        from openai import AsyncOpenAI
+        _client = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
     return _client
 
 
@@ -164,7 +166,7 @@ async def _call_llm(
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
 
-    response = client.chat.completions.create(**kwargs)
+    response = await client.chat.completions.create(**kwargs)
     choice = response.choices[0]
     content = choice.message.content or ""
 
@@ -236,11 +238,12 @@ async def generate_answer_llm(
     retrieved_data: dict,
     session_state: dict,
     memory_context: Optional[dict] = None,
+    system_prompt_override: Optional[str] = None,
 ) -> Optional[str]:
     if not LLM_ENABLED:
         return None
     try:
-        system = _build_system_prompt(memory_context)
+        system = _build_system_prompt(memory_context, system_prompt_override)
         context = _build_answer_context(user_message, retrieved_data, session_state, memory_context)
         raw = await _call_llm(system, context)
         cleaned = raw.strip() if raw else ""
@@ -251,6 +254,58 @@ async def generate_answer_llm(
     except Exception as e:
         logger.error("generate_answer_llm failed: %s", e)
         return None
+
+
+async def stream_answer_llm(
+    user_message: str,
+    retrieved_data: dict,
+    session_state: dict,
+    memory_context: Optional[dict] = None,
+    system_prompt_override: Optional[str] = None,
+) -> AsyncIterator[str]:
+    """
+    Streaming variant of generate_answer_llm.
+
+    Yields delta strings as they arrive from the model. Caller can
+    accumulate them to reconstruct the full answer.
+
+    Cancellation:
+        If the consumer (FastAPI streaming response) is cancelled
+        because the HTTP client disconnected, asyncio.CancelledError
+        propagates up here. We let it bubble out — the AsyncOpenAI
+        client will then close its underlying connection to DeepSeek,
+        which stops further token generation server-side. This is the
+        whole point: a real Stop button that doesn't waste API tokens.
+    """
+    if not LLM_ENABLED:
+        return
+
+    system = _build_system_prompt(memory_context, system_prompt_override)
+    context = _build_answer_context(user_message, retrieved_data, session_state, memory_context)
+
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": context},
+            ],
+            stream=True,
+        )
+        async for chunk in response:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+    except asyncio.CancelledError:
+        logger.info("stream_answer_llm cancelled (client disconnected) — "
+                    "closing upstream connection")
+        raise
+    except Exception as e:
+        logger.error("stream_answer_llm failed: %s", e)
+        return
 
 
 async def reflect_on_history_llm(
@@ -302,14 +357,42 @@ async def reflect_on_history_llm(
 
 # ── Internal helpers ─────────────────────────────────────
 
-def _build_system_prompt(memory_context: Optional[dict]) -> str:
+def get_default_answer_prompt() -> str:
+    """
+    Public accessor used by /api/system_prompt to seed the frontend's
+    Settings modal with the current default. If the prompt is ever
+    refactored (split, templatized, etc.), update this one function
+    instead of teaching the endpoint about a new name.
+    """
+    return ANSWER_SYSTEM_PROMPT
+
+
+def _build_system_prompt(
+    memory_context: Optional[dict],
+    override: Optional[str] = None,
+) -> str:
+    """
+    Compose the final system message sent to the LLM.
+
+    Layering:
+      base  ← `override` if a non-empty custom prompt was supplied,
+              otherwise the default ANSWER_SYSTEM_PROMPT
+      +memory block (per-student persistence) is still appended in either case,
+              so customizing the advisor's voice doesn't drop the user's profile.
+
+    Pass `override=""` or `None` to use the default.
+    """
+    base = override.strip() if (override and override.strip()) else ANSWER_SYSTEM_PROMPT
+    if override and override.strip():
+        logger.info("generate_answer_llm: using user-supplied system prompt override (%d chars)",
+                    len(override.strip()))
+
     if not memory_context:
-        return ANSWER_SYSTEM_PROMPT
-    parts = [ANSWER_SYSTEM_PROMPT]
+        return base
     block = memory_context.get("system_prompt_block")
-    if block:
-        parts.append("\n\n--- Persistent context about this student ---\n" + block)
-    return "".join(parts)
+    if not block:
+        return base
+    return base + "\n\n--- Persistent context about this student ---\n" + block
 
 
 def _build_answer_context(

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from app.routers import chat
+from app.routers import chat, system_info        # ← 跟 chat 一起 import
 from app.memory import get_memory_manager
 
 
@@ -29,6 +29,7 @@ app = FastAPI(
 
 # ── Routers ──────────────────────────────────────────────
 app.include_router(chat.router, prefix="/api")
+app.include_router(system_info.router)            # ← 不加 prefix，路径已经是 /api/...
 
 # ── Static files ─────────────────────────────────────────
 app.mount("/static", StaticFiles(directory="static"), name="static")

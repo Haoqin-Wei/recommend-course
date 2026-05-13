@@ -47,6 +47,37 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path("data/uci")
 
 
+# ── GE code normalization ────────────────────────────────
+#
+# Anteater /courses returns geList in long descriptive form like
+# "GE II: Science and Technology", but chat.py / mock_data /
+# section_ge.csv historical format / the frontend all use short codes
+# like "GE-2". We translate at the boundary so the rest of the codebase
+# never sees the long form.
+_GE_LONG_TO_SHORT: dict[str, str] = {
+    "GE Ia: Lower Division Writing":          "GE-1A",
+    "GE Ib: Upper Division Writing":          "GE-1B",
+    "GE II: Science and Technology":          "GE-2",
+    "GE III: Social & Behavioral Sciences":   "GE-3",
+    "GE IV: Arts and Humanities":             "GE-4",
+    "GE Va: Quantitative Literacy":           "GE-5A",
+    "GE Vb: Formal Reasoning":                "GE-5B",
+    "GE VI: Language Other Than English":     "GE-6",
+    "GE VII: Multicultural Studies":          "GE-7",
+    "GE VIII: International/Global Issues":   "GE-8",
+}
+
+
+def _normalize_ge_code(raw: str) -> str:
+    """'GE II: Science and Technology' → 'GE-2'. Unknown values pass through."""
+    return _GE_LONG_TO_SHORT.get(raw.strip(), raw.strip())
+
+
+def _parse_ge_list(raw_field: str) -> list[str]:
+    """Pipe-separated raw ge_list → list of normalized short codes."""
+    return [_normalize_ge_code(g) for g in (raw_field or "").split("|") if g]
+
+
 # ── Term format helpers ──────────────────────────────────
 
 def _term_display_to_id(t: str) -> str:
@@ -123,7 +154,7 @@ def _load_section_instructors() -> dict[str, list[str]]:
 
 def _to_course_dict(r: dict) -> dict:
     """Build the dict shape that downstream code (query.py, _build_card) expects."""
-    ge_categories = [g for g in (r.get("ge_list") or "").split("|") if g]
+    ge_categories = _parse_ge_list(r.get("ge_list", ""))
 
     # Flatten prereqs to colloquial course IDs
     prereqs: list[str] = []
@@ -253,7 +284,7 @@ def search_courses(
         if target_dept and r.get("department", "").upper() != target_dept.upper():
             continue
         if ge_category:
-            ges = (r.get("ge_list") or "").split("|")
+            ges = _parse_ge_list(r.get("ge_list", ""))
             if ge_category not in ges:
                 continue
         if target_term_anteater:

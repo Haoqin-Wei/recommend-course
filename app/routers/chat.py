@@ -76,6 +76,7 @@ class ChatRequest(BaseModel):
     session_id: str = "demo_session"
     student_id: Optional[str] = "demo_001"
     term: Optional[str] = None                          # 新增
+    system_prompt: Optional[str] = None                 # 新增：前端自定义 LLM system prompt
 
 
 class ChatResponse(BaseModel):
@@ -256,15 +257,30 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
                             session_state=get_known_fields(req.session_id))
 
     state = get_known_fields(req.session_id)
+
+    # ── Sync frontend's term to session state ──
+    # The dropdown is authoritative for THIS turn — without this, the
+    # downstream query falls back to state["term"] (often empty or stale)
+    # and retrieves nothing, causing the LLM to hallucinate courses.
+    if req.term and req.term != state.get("term"):
+        update_session(req.session_id, {"term": req.term})
+        state = get_known_fields(req.session_id)
+        logger.info("[term-sync] frontend term %r written to session %s",
+                    req.term, req.session_id)
+
     validation_dict = None                              # 新增：默认 None
 
     if intent == "single_query":
-        reply, cards, followups = await _handle_single_query(req.message, state, memory_context)
+        reply, cards, followups = await _handle_single_query(
+            req.message, state, memory_context,
+            system_prompt=req.system_prompt,            # 新增
+        )
     else:
-        # ── 新增：把 session_id / term 传进去，接收 validation_dict ──
+        # ── 新增：把 session_id / term / system_prompt 传进去 ──
         reply, cards, followups, validation_dict = await _handle_recommendation(
             req.message, state, memory_context,
             session_id=req.session_id, term_str=req.term,
+            system_prompt=req.system_prompt,            # 新增
         )
 
     add_message(req.session_id, "assistant", reply)
@@ -337,6 +353,8 @@ async def _handle_recommendation(
     memory_context=None,
     session_id=None,                                    # 新增
     term_str=None,                                      # 新增
+    system_prompt=None,                                 # 新增
+    on_token=None,                                      # 新增：流式回调
 ):
     from app.llm.adapter import generate_answer_llm
     results = query_course_recommendations(
@@ -346,7 +364,28 @@ async def _handle_recommendation(
         difficulty_preference=state.get("difficulty_preference"),
         recommendation_goal=state.get("recommendation_goal"),
     )
-    answer = await generate_answer_llm(user_msg, results, state, memory_context=memory_context)
+    # Empty / whitespace-only override → adapter falls back to default.
+    sp_override = system_prompt.strip() if (system_prompt and system_prompt.strip()) else None
+
+    if on_token is not None:
+        # Streaming path — yield chunks to caller as they arrive.
+        from app.llm.adapter import stream_answer_llm
+        chunks: list[str] = []
+        async for chunk in stream_answer_llm(
+            user_msg, results, state,
+            memory_context=memory_context,
+            system_prompt_override=sp_override,
+        ):
+            chunks.append(chunk)
+            await on_token(chunk)
+        answer = "".join(chunks) or None
+    else:
+        # Non-streaming path (existing behavior).
+        answer = await generate_answer_llm(
+            user_msg, results, state,
+            memory_context=memory_context,
+            system_prompt_override=sp_override,             # 新增
+        )
 
     if answer:
         all_candidates = results.get("primary", []) + results.get("flagged", [])
@@ -409,8 +448,29 @@ async def _handle_recommendation(
     return answer, cards, followups, validation_dict
 
 
-async def _handle_single_query(message, state, memory_context=None):
+async def _handle_single_query(message, state, memory_context=None, system_prompt=None, on_token=None):
     from app.llm.adapter import generate_answer_llm
+    sp_override = system_prompt.strip() if (system_prompt and system_prompt.strip()) else None
+
+    async def _call_llm(payload_data):
+        """Run generate_answer_llm OR stream_answer_llm depending on on_token."""
+        if on_token is None:
+            return await generate_answer_llm(
+                message, payload_data, state,
+                memory_context=memory_context,
+                system_prompt_override=sp_override,
+            )
+        from app.llm.adapter import stream_answer_llm
+        chunks: list[str] = []
+        async for chunk in stream_answer_llm(
+            message, payload_data, state,
+            memory_context=memory_context,
+            system_prompt_override=sp_override,
+        ):
+            chunks.append(chunk)
+            await on_token(chunk)
+        return "".join(chunks) or None
+
     ml = message.lower()
     from app.data.mock_data import COURSES
     for c in COURSES:
@@ -431,21 +491,224 @@ async def _handle_single_query(message, state, memory_context=None):
                     "sections": data.get("sections", []),
                     "reason": "",
                 }
-                ans = await generate_answer_llm(message, data, state, memory_context=memory_context)
+                ans = await _call_llm(data)
                 if not ans:
                     ans = generate_single_query_answer(data)
+                    if on_token:
+                        await on_token(ans)        # fallback also reaches the stream
                 fu = generate_single_query_followups(c["course_id"], state)
                 return ans, [card], fu
     from app.data.mock_data import PROFESSOR_RATINGS
     for name in PROFESSOR_RATINGS:
         if name.lower().split(",")[0] in ml:
             rating = query_professor(name)
-            ans = await generate_answer_llm(message, {"professor": name, "rating": rating}, state, memory_context=memory_context)
+            ans = await _call_llm({"professor": name, "rating": rating})
             if not ans:
                 ans = generate_professor_answer(name, rating)
+                if on_token:
+                    await on_token(ans)
             return ans, [], []
-    return ("I'm not sure which course or professor you mean. "
-            "Try a course ID like ICS33 or a professor name.", [], [])
+    fallback = ("I'm not sure which course or professor you mean. "
+                "Try a course ID like ICS33 or a professor name.")
+    if on_token:
+        await on_token(fallback)
+    return (fallback, [], [])
+
+
+# ══════════════════════════════════════════════════════════
+#  Streaming endpoint  /api/chat/stream
+# ══════════════════════════════════════════════════════════
+#
+# Same logic as the /api/chat endpoint above, but the LLM-generated
+# `reply` field is streamed back via Server-Sent Events instead of
+# waiting for the full text. cards/followups/validation are sent as
+# one final `meta` event.
+#
+# Why it matters:
+#   - UX: user sees text appearing immediately (no "Send → 10s blank → big reply")
+#   - Stop button: aborting the fetch closes the HTTP connection, FastAPI
+#     cancels the producer task, the async iterator inside stream_answer_llm
+#     gets CancelledError, AsyncOpenAI closes its connection to DeepSeek,
+#     and DeepSeek stops generating tokens. No wasted API tokens.
+#
+# Wire format:
+#   data: {"type": "token", "text": "<chunk>"}
+#   data: {"type": "token", "text": "<chunk>"}
+#   ...
+#   data: {"type": "meta",  "cards": [...], "followups": [...], ...}
+#   data: {"type": "done"}
+
+from fastapi.responses import StreamingResponse
+
+
+@router.post("/chat/stream")
+async def chat_stream_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
+    return StreamingResponse(
+        _stream_chat(req, background_tasks),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # tell nginx-like proxies not to buffer
+        },
+    )
+
+
+async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
+    """Async generator yielding SSE-formatted events."""
+    import asyncio
+    import json as _json
+
+    def sse(event: dict) -> str:
+        return f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+
+    queue: asyncio.Queue = asyncio.Queue()
+    DONE = object()
+
+    async def producer():
+        """Run the full chat pipeline, pushing events into the queue."""
+        try:
+            mem = get_memory_manager()
+            user_id = req.student_id or "demo_001"
+
+            session = get_or_create_session(req.session_id)
+            if not session.get("major") and req.student_id:
+                load_student_into_session(req.session_id, req.student_id)
+                session = get_or_create_session(req.session_id)
+
+            add_message(req.session_id, "user", req.message)
+            mem.on_turn_start(req.session_id, user_id)
+            logger.info("[stream turn %d] user=%s msg=%r",
+                        mem.turn_count(req.session_id), user_id, req.message[:120])
+
+            # Channel A
+            extracted = await extract_info_from_message(req.message, session)
+            if extracted:
+                _capture_hard_facts(session, extracted, user_id, mem)
+                if extracted:
+                    session = update_session(req.session_id, extracted)
+
+            intent_result = await classify_intent(req.message)
+            intent = intent_result["intent"]
+            logger.info("[stream intent] %s", intent)
+
+            llm_entities = intent_result.get("entities", {})
+            if llm_entities:
+                eu = {f: llm_entities[f]
+                      for f in ("term", "major", "difficulty_preference", "recommendation_goal")
+                      if llm_entities.get(f)}
+                if eu:
+                    session = update_session(req.session_id, eu)
+
+            memory_context = {
+                "system_prompt_block": mem.system_prompt_block(user_id),
+                "prefetched_context": mem.prefetch(req.message, user_id),
+            }
+
+            # ── Short paths: deliver whole reply at once ──
+            if intent == "off_topic":
+                reply = generate_off_topic_response(req.message)
+                add_message(req.session_id, "assistant", reply)
+                mem.sync_turn(user_id, req.message, reply, req.session_id)
+                _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
+                await queue.put({"type": "token", "text": reply})
+                await queue.put({
+                    "type": "meta",
+                    "intent": intent,
+                    "cards": [],
+                    "followups": [],
+                    "validation_report": None,
+                    "session_state": get_known_fields(req.session_id),
+                    "pending_schedule": session.get("pending_schedule", []),
+                })
+                return
+
+            if needs_clarification(session, intent):
+                missing = detect_missing_fields(session, intent)
+                reply = build_clarification_response(missing)
+                add_message(req.session_id, "assistant", reply)
+                mem.sync_turn(user_id, req.message, reply, req.session_id)
+                _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
+                await queue.put({"type": "token", "text": reply})
+                await queue.put({
+                    "type": "meta",
+                    "intent": intent,
+                    "cards": [],
+                    "followups": [],
+                    "validation_report": None,
+                    "session_state": get_known_fields(req.session_id),
+                    "pending_schedule": session.get("pending_schedule", []),
+                })
+                return
+
+            state = get_known_fields(req.session_id)
+            if req.term and req.term != state.get("term"):
+                update_session(req.session_id, {"term": req.term})
+                state = get_known_fields(req.session_id)
+                logger.info("[stream term-sync] %r written", req.term)
+
+            # ── Stream the LLM answer through on_token ──
+            async def on_token(text: str):
+                await queue.put({"type": "token", "text": text})
+
+            validation_dict = None
+            if intent == "single_query":
+                reply, cards, followups = await _handle_single_query(
+                    req.message, state, memory_context,
+                    system_prompt=req.system_prompt,
+                    on_token=on_token,
+                )
+            else:
+                reply, cards, followups, validation_dict = await _handle_recommendation(
+                    req.message, state, memory_context,
+                    session_id=req.session_id, term_str=req.term,
+                    system_prompt=req.system_prompt,
+                    on_token=on_token,
+                )
+
+            add_message(req.session_id, "assistant", reply)
+            mem.sync_turn(user_id, req.message, reply, req.session_id)
+            _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
+
+            await queue.put({
+                "type": "meta",
+                "intent": intent,
+                "cards": cards,
+                "followups": followups,
+                "validation_report": validation_dict,
+                "session_state": state,
+                "pending_schedule": session.get("pending_schedule", []),
+            })
+        except asyncio.CancelledError:
+            logger.info("[stream] producer cancelled (client disconnected)")
+            raise
+        except Exception as e:
+            logger.exception("[stream] producer failed: %s", e)
+            await queue.put({"type": "error", "message": str(e)})
+        finally:
+            await queue.put(DONE)
+
+    task = asyncio.create_task(producer())
+    try:
+        while True:
+            event = await queue.get()
+            if event is DONE:
+                yield sse({"type": "done"})
+                break
+            yield sse(event)
+    except asyncio.CancelledError:
+        # Client disconnected — cancel the producer so the LLM stream
+        # closes its upstream connection and DeepSeek stops generating.
+        logger.info("[stream] consumer cancelled, cascading to producer")
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+        raise
+    finally:
+        if not task.done():
+            task.cancel()
 
 
 # ── Schedule endpoints ───────────────────────────────────
