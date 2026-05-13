@@ -877,17 +877,46 @@ input { font-family: inherit; }
   opacity: 0.9;
 }
 
-/* ── Streaming cursor (shown while LLM is generating) ── */
-.msg-ai-body.streaming::after {
-  content: '▌';
-  color: var(--accent);
-  margin-left: 2px;
-  animation: cursor-pulse 0.85s ease-in-out infinite;
-  font-weight: var(--weight-medium);
+/* ── Generation indicators ──────────────────────────── */
+/* Pre-token "thinking" state — shimmer light sweeps across the word */
+.msg-ai-body.thinking {
+  display: inline-block;
+  font-style: italic;
+  background: linear-gradient(
+    90deg,
+    var(--text-muted) 0%,
+    var(--text-muted) 25%,
+    var(--text-primary) 50%,
+    var(--text-muted) 75%,
+    var(--text-muted) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: shimmer 1.6s linear infinite;
 }
-@keyframes cursor-pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.25; }
+@keyframes shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* Token-streaming state — small pulsing dot after the last char */
+.msg-ai-body.streaming::after {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  vertical-align: 1px;
+  animation: dot-pulse 1.05s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1;    transform: scale(1);    }
+  50%      { opacity: 0.25; transform: scale(0.65); }
 }
 
 /* ── Stop button ─────────────────────────────────────── */
@@ -1161,9 +1190,9 @@ input { font-family: inherit; }
           What would you like help with?
         </div>
         <div class="followups" id="welcomeFollowups">
-          <button class="followup-chip" onclick="sendMessage('Recommend courses for next quarter')">Recommend courses</button>
-          <button class="followup-chip" onclick="sendMessage('What are some easy GE courses?')">Easy GE courses</button>
-          <button class="followup-chip" onclick="sendMessage('How is professor Thornton?')">Professor ratings</button>
+          <button class="followup-chip" onclick="sendFollowup('Recommend courses for next quarter')">Recommend courses</button>
+          <button class="followup-chip" onclick="sendFollowup('What are some easy GE courses?')">Easy GE courses</button>
+          <button class="followup-chip" onclick="sendFollowup('How is professor Thornton?')">Professor ratings</button>
         </div>
       </div>
     </div>
@@ -1371,13 +1400,13 @@ async function sendMessage(text) {
 
         if (event.type === 'token') {
           fullText += event.text;
-          appendStreamingToken(aiMsg, event.text);
+          appendStreamingToken(aiMsg, fullText);
         } else if (event.type === 'meta') {
           meta = event;
         } else if (event.type === 'error') {
           console.error('Stream error event:', event.message);
           fullText += `\n\n_(server error: ${event.message})_`;
-          appendStreamingToken(aiMsg, ''); // trigger re-scroll
+          appendStreamingToken(aiMsg, fullText); // re-render with error suffix
         } else if (event.type === 'done') {
           // explicit termination — finalize below
         }
@@ -1423,23 +1452,50 @@ function toggleSendStop(isGenerating) {
 function startAiMessage() {
   const wrap = document.createElement('div');
   wrap.className = 'msg msg-ai';
+  // Initial state: shimmer "Thinking" until first token arrives.
   wrap.innerHTML = '<div class="msg-ai-label">Advisor</div>'
-                 + '<div class="msg-ai-body streaming"></div>';
+                 + '<div class="msg-ai-body thinking">Thinking</div>';
   document.getElementById('chatScroll').appendChild(wrap);
   scrollChat();
+  // Per-message render scheduler — collapses bursts of tokens into one
+  // markdown render per animation frame (~16ms).
+  wrap._pendingFrame = null;
+  wrap._pendingText  = '';
+  wrap._gotFirstToken = false;
   return wrap;
 }
 
-function appendStreamingToken(wrap, text) {
-  // During streaming, accumulate as text (plain). Markdown is rendered
-  // once at the end. textContent is fast and safe (no XSS surface).
-  const body = wrap.querySelector('.msg-ai-body');
-  body.textContent += text;
-  scrollChat();
+function appendStreamingToken(wrap, fullText) {
+  if (!wrap._gotFirstToken) {
+    // First chunk has arrived — swap thinking shimmer for streaming dot.
+    const body = wrap.querySelector('.msg-ai-body');
+    body.classList.remove('thinking');
+    body.classList.add('streaming');
+    body.textContent = '';
+    wrap._gotFirstToken = true;
+  }
+  wrap._pendingText = fullText;
+  if (wrap._pendingFrame) return;  // already scheduled this frame
+  wrap._pendingFrame = requestAnimationFrame(() => {
+    const body = wrap.querySelector('.msg-ai-body');
+    if (body) {
+      body.innerHTML = formatMarkdown(wrap._pendingText || '');
+    }
+    wrap._pendingFrame = null;
+    scrollChat();
+  });
 }
 
 function finalizeAiMessage(wrap, fullText, meta, stopped) {
+  // Flush any pending frame so we render the final text definitively
+  if (wrap._pendingFrame) {
+    cancelAnimationFrame(wrap._pendingFrame);
+    wrap._pendingFrame = null;
+  }
   const body = wrap.querySelector('.msg-ai-body');
+  // Remove both indicator classes so neither thinking shimmer nor
+  // streaming dot persists after generation ends.
+  body.classList.remove('thinking');
   body.classList.remove('streaming');
   body.innerHTML = formatMarkdown(fullText || '');
 
@@ -1459,7 +1515,7 @@ function finalizeAiMessage(wrap, fullText, meta, stopped) {
     fuDiv.className = 'followups';
     let fuHtml = '';
     for (const fu of meta.followups) {
-      fuHtml += `<button class="followup-chip" onclick="sendMessage(\`${fu.replace(/`/g,"'")}\`)">${escHTML(fu)}</button>`;
+      fuHtml += `<button class="followup-chip" onclick="sendFollowup(\`${fu.replace(/`/g,"'")}\`)">${escHTML(fu)}</button>`;
     }
     fuDiv.innerHTML = fuHtml;
     wrap.appendChild(fuDiv);
@@ -1512,7 +1568,7 @@ function appendAI(data) {
   if (data.followups && data.followups.length > 0) {
     html += '<div class="followups">';
     for (const fu of data.followups) {
-      html += `<button class="followup-chip" onclick="sendMessage(\`${fu.replace(/`/g,"'")}\`)">${escHTML(fu)}</button>`;
+      html += `<button class="followup-chip" onclick="sendFollowup(\`${fu.replace(/`/g,"'")}\`)">${escHTML(fu)}</button>`;
     }
     html += '</div>';
   }
@@ -1778,6 +1834,48 @@ function parseTimeToMinutes(t) {
 function formatMarkdown(text) {
   return text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>');
 }
+/* ── Followup chips: re-frame advisor-perspective text ───
+   Followups SHOULD be authored as user imperatives (see backend
+   followup.py), but if anything slips through ("Want me to X?" /
+   "Should I X?" / 中文 "要不要..." 等), transform it on click so the
+   message bubble doesn't read as inverted nonsense.
+*/
+function reframeFollowupForUser(text) {
+  if (!text) return text;
+  let t = text.trim();
+  // Strip trailing ? / ？ for cleaner imperative output.
+  t = t.replace(/[?？]+\s*$/, '').trim();
+
+  const PATTERNS = [
+    // ── English ──
+    [/^(?:Want|Would you want|Do you want)(?: me)?\s+to\s+(.+)$/i,
+      (_, x) => x.charAt(0).toUpperCase() + x.slice(1)],
+    [/^(?:Would you like)(?: me)?\s+to\s+(.+)$/i,
+      (_, x) => x.charAt(0).toUpperCase() + x.slice(1)],
+    [/^(?:Should I|Shall I)\s+(.+)$/i,
+      (_, x) => 'Yes, ' + x],
+    [/^Can I\s+(.+?)(?:\s+for you)?$/i,
+      (_, x) => 'Please ' + x],
+    // ── 中文 ──
+    [/^要不要我?帮你?(.+)$/,        (_, x) => '帮我' + x],
+    [/^要不要(.+)$/,                 (_, x) => '我想' + x],
+    [/^需要(?:我)?帮?(?:你)?(.+?)(?:吗)?$/, (_, x) => '请' + x],
+    [/^我可以(?:帮你)?(.+?)(?:吗)?$/, (_, x) => '请' + x],
+    [/^你想(.+?)(?:吗)?$/,           (_, x) => '我想' + x],
+    [/^是否(?:要|想)?(.+)$/,         (_, x) => '请' + x],
+  ];
+
+  for (const [re, fn] of PATTERNS) {
+    const m = t.match(re);
+    if (m) return fn(...m);
+  }
+  return text;  // no pattern matched — send original
+}
+
+function sendFollowup(text) {
+  sendMessage(reframeFollowupForUser(text));
+}
+
 function escHTML(s) {
   const d = document.createElement('div');
   d.textContent = s;

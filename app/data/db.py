@@ -31,7 +31,7 @@ import json
 import logging
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 
 from app.catalog.departments import (
     colloquial_course_id, resolve_department,
@@ -351,22 +351,147 @@ def get_prerequisites(course_id: str) -> list[str]:
     return course.get("prerequisites", []) if course else []
 
 
-def check_prerequisites_met(course_id: str, completed_courses: list[str]) -> dict:
-    """
-    Check if all listed prereqs have been completed.
+# ── Prereq tree evaluator (Phase 2.7) ────────────────────
+#
+# Anteater /courses returns a structured prerequisite_tree_json with
+# AND/OR semantics. Schema (verified against real CS122A / CS161 / CS117):
+#
+#   PrereqNode =
+#     | { AND: PrereqNode[] }
+#     | { OR:  PrereqNode[] }
+#     | { prereqType: "course", courseId: "I&C SCI 33",
+#         coreq: bool, minGrade: "C" }
+#     | { prereqType: "exam",   examName: "AP CALCULUS BC",
+#         minGrade: "4" }
+#
+# Top-level always wraps in AND, even when there's a single requirement.
+# minGrade is parsed but ignored (we don't track student grades on this
+# demo's profile). coreq is also ignored — in_progress courses count
+# either way for next-term planning.
 
-    PHASE 2 SIMPLIFICATION: treats the prereq list as a flat AND-list.
-    Real UCI prereqs have AND/OR logic in `prerequisite_tree_json`
-    (e.g. CS122A needs "ICS33 OR EECS114") — Phase 3 will switch to
-    the tree. For now, this errs on the strict side: students with
-    partial-but-sufficient prereqs may see their target in `flagged`
-    instead of `primary`.
+def _parse_anteater_course_id(courseId_str: str) -> Optional[str]:
+    """'I&C SCI 33' → 'ICS33'. None if unparseable."""
+    parts = (courseId_str or "").strip().split()
+    if len(parts) < 2:
+        return None
+    dept = " ".join(parts[:-1])
+    num = parts[-1]
+    cid = colloquial_course_id(dept, num)
+    return cid or None
 
-    Returns {"met": bool, "missing": [str]}
+
+def _format_exam_req(node: dict) -> str:
+    """{examName: 'AP CALCULUS BC', minGrade: '4'} → 'AP CALCULUS BC ≥ 4'"""
+    name = node.get("examName") or "an exam"
+    grade = node.get("minGrade")
+    return f"{name} ≥ {grade}" if grade else name
+
+
+def _eval_prereq_tree(
+    node: Any,
+    completed: set[str],
+    in_progress: set[str],
+) -> list[str]:
     """
+    Recursively evaluate a prereq tree node.
+
+    Returns a list of human-readable unmet requirement strings.
+    Empty list ⇔ fully satisfied. AND groups concatenate; OR groups
+    collapse to a single ' or '-joined item.
+    """
+    if not node or not isinstance(node, dict):
+        return []
+
+    # AND: extend children's unmet lists
+    if "AND" in node and isinstance(node["AND"], list):
+        out: list[str] = []
+        for child in node["AND"]:
+            out.extend(_eval_prereq_tree(child, completed, in_progress))
+        return out
+
+    # OR: short-circuit on first satisfied child; otherwise join all summaries
+    if "OR" in node and isinstance(node["OR"], list):
+        child_summaries: list[str] = []
+        for child in node["OR"]:
+            child_unmet = _eval_prereq_tree(child, completed, in_progress)
+            if not child_unmet:
+                return []                        # one branch satisfied → OR satisfied
+            if len(child_unmet) == 1:
+                child_summaries.append(child_unmet[0])
+            else:
+                # Nested AND inside OR — wrap as compound requirement.
+                child_summaries.append("(" + " + ".join(child_unmet) + ")")
+        return [" or ".join(child_summaries)]
+
+    # Leaf: course
+    if node.get("prereqType") == "course":
+        cid = _parse_anteater_course_id(node.get("courseId", ""))
+        if not cid:
+            return []                            # unparseable → lenient
+        cid_upper = cid.upper()
+        if cid_upper in completed or cid_upper in in_progress:
+            return []
+        return [cid]
+
+    # Leaf: exam (we don't track student exam scores → treat as unmet
+    # but let parent OR group rescue this if another branch is satisfied)
+    if node.get("prereqType") == "exam":
+        return [_format_exam_req(node)]
+
+    return []                                    # unknown leaf type → lenient
+
+
+def check_prerequisites_met(
+    course_id: str,
+    completed_courses: list[str],
+    in_progress_courses: Optional[list[str]] = None,
+) -> dict:
+    """
+    Check whether a course's prerequisites are satisfied by the
+    student's transcript.
+
+    Phase 2.7: uses the AND/OR `prerequisite_tree_json` when present
+    (correctly handling cases like CS122A = "ICS33 **or** EECS114").
+    Falls back to the flat AND list only if the tree is missing or
+    fails to parse.
+
+    Args:
+        course_id: target course in colloquial form ('CS122A', 'ICS33', ...)
+        completed_courses: courses with a passing grade on transcript
+        in_progress_courses: courses currently being taken. These count
+            as satisfied for next-term planning. Pass None or [] for
+            strict completed-only semantics.
+
+    Returns:
+        {"met": bool, "missing": [str]}
+        Missing entries can be single courses ('ICS33') or compound
+        strings ('ICS33 or EECS114', 'MATH 2B or AP CALCULUS BC ≥ 4').
+    """
+    courses = _load_courses()
+    raw = courses.get(course_id) or courses.get((course_id or "").upper())
+
+    completed_set   = {c.upper() for c in (completed_courses or [])}
+    in_progress_set = {c.upper() for c in (in_progress_courses or [])}
+
+    # Try tree first
+    if raw:
+        tree_json = raw.get("prerequisite_tree_json") or ""
+        if tree_json.strip() and tree_json.strip() != "{}":
+            try:
+                tree = json.loads(tree_json)
+            except (json.JSONDecodeError, ValueError):
+                tree = None
+            if tree:
+                missing = _eval_prereq_tree(tree, completed_set, in_progress_set)
+                return {"met": len(missing) == 0, "missing": missing}
+
+    # Fallback: flat AND list (legacy Phase 2 behavior)
     prereqs = get_prerequisites(course_id)
-    completed_upper = {c.upper() for c in completed_courses}
-    missing = [p for p in prereqs if p.upper() not in completed_upper]
+    missing = [
+        p for p in prereqs
+        if p.upper() not in completed_set
+        and p.upper() not in in_progress_set
+    ]
     return {"met": len(missing) == 0, "missing": missing}
 
 

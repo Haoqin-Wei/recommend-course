@@ -52,8 +52,11 @@ def query_course_recommendations(
     for course in candidates:
         cid = course["course_id"]
 
-        # Prerequisites check
-        prereq_status = db.check_prerequisites_met(cid, completed)
+        # Prerequisites check — selected courses count as "in progress",
+        # i.e. will be completed in time for next-term planning.
+        prereq_status = db.check_prerequisites_met(
+            cid, completed, in_progress_courses=selected,
+        )
 
         # Sections for the requested term
         sections = db.get_sections(cid, term)
