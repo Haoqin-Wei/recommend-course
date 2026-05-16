@@ -9,6 +9,8 @@ Classifies user messages into:
   - "off_topic"             → do not activate skill
 
 Strategy:
+  0. Structured commitment/decision regex (intent_rules.py) — deterministic,
+     covers "我决定选 CS122A", "I'll take CS161", drops, comparisons.
   1. Course-ID pattern match → strongest course-related signal (e.g. STAT67, CS122A)
   2. High-confidence keyword match → return immediately (fast path)
   3. Ambiguous / low-confidence → call LLM for classification
@@ -22,14 +24,14 @@ import re
 # Matches course codes like CS33, ICS33, STAT67, CS122A, IN4MATX43,
 # ANTHRO2A, WRITING39C, MATH2A, ECON15A.
 #
-# Two alternatives:
-#   1. Letter prefix (with possibly embedded digits like IN4MATX) followed
-#      by 2-3 digits and optional trailing letter — covers most courses.
-#   2. Pure-letter prefix of 3+ chars followed by a single digit and
-#      optional letter — covers 1-digit codes like ANTHRO2A / MATH2A.
-# The 3-letter minimum on alt 2 prevents false positives like 'A1' / 'AB1'.
+# IMPORTANT: uses (?<![A-Za-z0-9]) / (?![A-Za-z0-9]) instead of \b
+# because Python's regex \b is Unicode-aware — Chinese characters are
+# classified as "word" characters by default, so \b between 选 and CS
+# does NOT match in "我决定选CS122A". The look-arounds below say "not
+# preceded / followed by an ASCII letter or digit" — Chinese characters
+# are fine as neighbors.
 COURSE_ID_PATTERN = re.compile(
-    r'\b(?:[A-Z][A-Z0-9]{1,7}\d{2,3}[A-Z]?|[A-Z]{3,8}\d[A-Z]?)\b',
+    r'(?<![A-Za-z0-9])(?:[A-Z][A-Z0-9]{1,7}\d{2,3}[A-Z]?|[A-Z]{3,8}\d[A-Z]?)(?![A-Za-z0-9])',
     re.IGNORECASE,
 )
 
@@ -75,7 +77,37 @@ def classify_intent_rules(message: str) -> dict:
     """
     Rule-based intent classification (fast path).
     Returns result with confidence score.
+
+    Layering (most specific first):
+      0. Structured commitment/decision regex (intent_rules.py) — explicit
+         multi-language patterns like "我决定选 X", "I'll take Y", drops,
+         comparisons. Catches commitments BEFORE the broader Course-ID
+         match below so that "我决定选 CS122A" routes to single_query
+         (focused analysis) rather than course_recommendation (which
+         would query 10 candidates for the term — not what the user wants
+         after they've already decided).
+      1. Off-topic keywords — unambiguous non-course questions.
+      2. Course-ID pattern — anything with a course code is course-related.
+      3. Single-point query patterns.
+      4. General course-related keywords.
+      5. No match → off_topic with low confidence (falls through to LLM).
     """
+    # ── Layer 0: structured commitment/decision rules ─────
+    try:
+        from app.llm import intent_rules
+        rule_result = intent_rules.classify_by_rules(message)
+        if rule_result:
+            return {
+                "intent": rule_result["intent"],
+                "confidence": 0.95,
+                "matched_keywords": [f"rule:{rule_result.get('rule_id')}"],
+                "entities": rule_result.get("entities", {}),
+                "source": "structured_rule",
+            }
+    except Exception:
+        # Don't let a regex bug kill the chain — fall through silently.
+        pass
+
     msg_lower = message.lower()
 
     # 1. Off-topic keywords first — these are unambiguous

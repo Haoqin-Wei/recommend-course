@@ -342,6 +342,15 @@ def _normalize(raw: dict, course_id: str) -> Optional[dict]:
         "graded":        graded_total,
         "letter_counts": counts,
         "letter_pct":    pct,
+        # ── Flat aliases (back-compat with answer.py / mock_data schema)
+        # answer.py and any other legacy callers expect pct_A..pct_F
+        # directly on the dict, not nested under "letter_pct". We keep
+        # both shapes so neither old nor new call sites break.
+        "pct_A":         pct["A"],
+        "pct_B":         pct["B"],
+        "pct_C":         pct["C"],
+        "pct_D":         pct["D"],
+        "pct_F":         pct["F"],
         "source":        "Anteater /grades/aggregate (all historical)",
     }
 

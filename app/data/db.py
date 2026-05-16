@@ -108,15 +108,29 @@ def get_prerequisites(course_id: str) -> list[str]:
     return []
 
 
-def check_prerequisites_met(course_id: str, completed_courses: list[str]) -> dict:
+def check_prerequisites_met(
+    course_id: str,
+    completed_courses: list[str],
+    in_progress_courses: Optional[list[str]] = None,
+) -> dict:
     """
     Check if a student meets the prerequisites for a course.
+
+    Both completed_courses AND in_progress_courses count toward
+    satisfying prereqs. Rationale: for next-term planning, a student
+    currently enrolled in ICS33 will have completed it by the start
+    of the term they're planning, so it should count as a satisfied
+    prereq for any course that lists ICS33 as a dependency.
+
+    The in_progress_courses parameter is optional for back-compat
+    with older callers that pass only two positional args.
+
     Returns {"met": bool, "missing": [str]}
-    TODO: Handle complex prerequisite logic (AND/OR trees).
     """
     prereqs = get_prerequisites(course_id)
-    completed_upper = [c.upper() for c in completed_courses]
-    missing = [p for p in prereqs if p.upper() not in completed_upper]
+    satisfied: set[str] = {c.upper() for c in (completed_courses or [])}
+    satisfied.update(c.upper() for c in (in_progress_courses or []))
+    missing = [p for p in prereqs if p.upper() not in satisfied]
     return {"met": len(missing) == 0, "missing": missing}
 
 

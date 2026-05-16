@@ -111,6 +111,12 @@ COURSES = [
 ]
 
 # ── Sections & Schedules (Fall 2025 demo) ────────────────
+# Backing data for db.get_sections() / db.get_schedule_for_student(),
+# which are used by query.py for conflict detection and section listing.
+#
+# A future cleanup (Round 4+) will migrate query.py off db.get_sections
+# and onto app.catalog.view.CatalogView (which loads real websoc data —
+# ~11,901 sections). Until then, keep this mock list maintained.
 SECTIONS = [
     {"course_id": "ICS31",      "section": "A", "term": "Fall 2025", "instructor": "Kay, R.",      "days": "MWF",  "time": "10:00-10:50", "location": "DBH 1500",   "seats_open": 20},
     {"course_id": "ICS32",      "section": "A", "term": "Fall 2025", "instructor": "Thornton, A.", "days": "TuTh", "time": "11:00-12:20", "location": "ICS 174",    "seats_open": 5},

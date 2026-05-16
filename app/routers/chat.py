@@ -125,8 +125,21 @@ def _resolve_session_id(
     Translate the request's session_id into a persistent session_id
     on disk. Returns a session_id starting with 'sess_'.
     """
+    # Case 0 (Phase 3 R3): empty / null session_id is an explicit
+    # "create a new session" signal from the frontend. Skip caching —
+    # we want a brand-new session_id every time the user clicks
+    # "+ New chat" and sends their first message.
+    if not req_session_id:
+        new_sid = sessions_data.create_session(
+            user_id,
+            title="New conversation",
+            term_scope=term_str,
+        )
+        logger.info("[stream] new session %s created (frontend signalled new)", new_sid)
+        return new_sid
+
     # Case 1: frontend already sent a real session_id and it exists
-    if req_session_id and req_session_id.startswith("sess_"):
+    if req_session_id.startswith("sess_"):
         try:
             sessions_data.get_session_meta(user_id, req_session_id)
             return req_session_id
@@ -136,7 +149,8 @@ def _resolve_session_id(
                 req_session_id,
             )
 
-    # Case 2: legacy request — check in-memory mapping first
+    # Case 2: legacy request (e.g. old "demo_session" key) — check
+    # in-memory mapping first
     in_mem = state_module._sessions.get(req_session_id, {})
     cached = in_mem.get("persistent_session_id")
     if cached:
@@ -198,19 +212,119 @@ def _persist_turn(
     persistent_sid: str,
     user_msg: str,
     assistant_reply: str,
-) -> int:
+) -> tuple[int, bool]:
     """
     Append user + assistant turns to sessions/{sid}/turns.jsonl.
-    Returns the turn_index of the assistant reply (used for decision pinning).
+
+    Returns:
+        (turn_index, did_auto_title)
+        - turn_index: the assistant reply's index (used for decision pinning)
+        - did_auto_title: True iff we JUST replaced a placeholder title with
+          a snippet of the user's message. The caller uses this signal to
+          schedule an LLM-generated title via _maybe_schedule_auto_title.
+          False means the title was already user-meaningful (don't touch it).
+
+    Side effect: if this is the FIRST turn in the session (i.e. session
+    meta currently has a placeholder title — either "New conversation"
+    from chat.py's _resolve_session_id or "New session" from
+    sessions.create_session's default), set a snippet title from the
+    first 30 chars of the user message. Round 4's _auto_title_session
+    then replaces that snippet with an LLM-generated short title.
+
     Failures here are logged but don't break the response.
     """
+    did_auto_title = False
     try:
         sessions_data.append_turn(user_id, persistent_sid, "user", user_msg)
         idx = sessions_data.append_turn(user_id, persistent_sid, "assistant", assistant_reply)
-        return idx
+
+        # First-turn snippet title (cheap heuristic; Round 4 LLM auto-title
+        # runs as a BackgroundTask and overwrites this shortly after).
+        try:
+            meta = sessions_data.get_session_meta(user_id, persistent_sid)
+            placeholder_titles = {"New conversation", "New session", "", None}
+            if meta.get("title") in placeholder_titles:
+                snippet = (user_msg or "").strip().replace("\n", " ")
+                if snippet:
+                    title = snippet[:30] + ("…" if len(snippet) > 30 else "")
+                    # update_session_meta takes **kwargs, not a dict
+                    sessions_data.update_session_meta(
+                        user_id, persistent_sid, title=title,
+                    )
+                    did_auto_title = True
+                    logger.info("[stream] snippet-titled session %s → %r (LLM title pending)",
+                                persistent_sid, title)
+        except Exception as e:
+            # Elevated from debug → warning so future regressions are
+            # actually visible in the log.
+            logger.warning("snippet-title failed for %s: %s: %s",
+                           persistent_sid, type(e).__name__, e)
+
+        return idx, did_auto_title
     except Exception as e:
         logger.warning("[stream] persist_turn failed for %s: %s", persistent_sid, e)
-        return 0
+        return 0, False
+
+
+# ── Round 4: LLM auto-title background task ──────────────
+
+async def _auto_title_session(
+    user_id: str,
+    persistent_sid: str,
+    user_msg: str,
+    assistant_reply: str,
+) -> None:
+    """
+    Fire-and-forget: ask the LLM for a short (5–10 char) title and
+    overwrite the snippet title we set in _persist_turn.
+
+    Triggered ONLY when _persist_turn returned did_auto_title=True, which
+    means:
+        - This is the first turn of a brand-new session, AND
+        - The title was just set to a snippet placeholder by us.
+
+    On any failure (LLM disabled, network error, parse failure, empty
+    return) we log and keep the snippet title. No retry.
+    """
+    try:
+        from app.llm.adapter import generate_session_title_llm
+
+        title = await generate_session_title_llm(user_msg, assistant_reply)
+        if not title:
+            logger.info("[auto-title] LLM returned nothing for %s — keeping snippet",
+                        persistent_sid)
+            return
+
+        sessions_data.update_session_meta(user_id, persistent_sid, title=title)
+        logger.info("[auto-title] %s → %r", persistent_sid, title)
+    except Exception as e:
+        logger.warning("[auto-title] failed for %s: %s: %s",
+                       persistent_sid, type(e).__name__, e)
+
+
+def _maybe_schedule_auto_title(
+    background_tasks: BackgroundTasks,
+    did_auto_title: bool,
+    user_id: str,
+    persistent_sid: str,
+    user_msg: str,
+    assistant_reply: str,
+) -> None:
+    """
+    If _persist_turn just put a snippet title on a brand-new session,
+    schedule an LLM auto-title BackgroundTask. BackgroundTasks run AFTER
+    the SSE stream closes, so the user never waits on this.
+
+    Idempotent design: the task only fires when did_auto_title=True
+    (i.e. first turn of a new session). Subsequent turns keep whatever
+    title was set previously — we never overwrite an existing title.
+    """
+    if not did_auto_title:
+        return
+    background_tasks.add_task(
+        _auto_title_session,
+        user_id, persistent_sid, user_msg, assistant_reply,
+    )
 
 
 def _detect_and_pin_decisions(
@@ -677,33 +791,44 @@ async def _handle_single_query(message, state, memory_context=None, system_promp
             await on_token(chunk)
         return "".join(chunks) or None
 
-    ml = message.lower()
-    from app.data.mock_data import COURSES
-    for c in COURSES:
-        if c["course_id"].lower() in ml:
-            data = query_single_course(c["course_id"], state.get("term"))
-            if data:
-                card = {
-                    "course_id": data["course"]["course_id"],
-                    "title": data["course"]["title"],
-                    "units": data["course"]["units"],
-                    "department": data["course"].get("department", ""),
-                    "description": data["course"].get("description", ""),
-                    "ge_category": data["course"].get("ge_category"),
-                    "major_requirement": data["course"].get("major_requirement", []),
-                    "prereq_met": True, "prereq_missing": [],
-                    "has_conflict": False,
-                    "grade_distribution": data.get("grade_distribution"),
-                    "sections": data.get("sections", []),
-                    "reason": "",
-                }
-                ans = await _call_llm(data)
-                if not ans:
-                    ans = generate_single_query_answer(data)
-                    if on_token:
-                        await on_token(ans)        # fallback also reaches the stream
-                fu = generate_single_query_followups(c["course_id"], state)
-                return ans, [card], fu
+    # ── Phase 3 R3 cleanup: regex extraction + real catalog ──
+    # Was: `for c in mock_data.COURSES: if c["course_id"].lower() in ml: ...`
+    # Problems with the old approach:
+    #   - lower()-substring match falsely matches "CS33" inside "CS331"
+    #   - only finds courses present in mock_data (10 of 6687)
+    #   - drags mock_data into the hot path even when LLM is fine
+    # The fix: extract course IDs via the Unicode-safe regex (same one
+    # _resolve_referenced_course uses), then query the REAL catalog
+    # through db.query_single_course (loads from data/uci/courses.csv).
+    for raw_course_id in _COURSE_ID_SCAN.findall(message):
+        course_id = raw_course_id.upper()
+        data = query_single_course(course_id, state.get("term"))
+        if data:
+            card = {
+                "course_id": data["course"]["course_id"],
+                "title": data["course"]["title"],
+                "units": data["course"]["units"],
+                "department": data["course"].get("department", ""),
+                "description": data["course"].get("description", ""),
+                "ge_category": data["course"].get("ge_category"),
+                "major_requirement": data["course"].get("major_requirement", []),
+                "prereq_met": True, "prereq_missing": [],
+                "has_conflict": False,
+                "grade_distribution": data.get("grade_distribution"),
+                "sections": data.get("sections", []),
+                "reason": "",
+            }
+            ans = await _call_llm(data)
+            if not ans:
+                logger.warning(
+                    "[single_query] LLM returned empty for %s — using template fallback",
+                    course_id,
+                )
+                ans = generate_single_query_answer(data)
+                if on_token:
+                    await on_token(ans)        # fallback also reaches the stream
+            fu = generate_single_query_followups(course_id, state)
+            return ans, [card], fu
     from app.data.mock_data import PROFESSOR_RATINGS
     for name in PROFESSOR_RATINGS:
         if name.lower().split(",")[0] in ml:
@@ -882,7 +1007,13 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                 reply = generate_off_topic_response(req.message)
                 add_message(req.session_id, "assistant", reply)
                 mem.sync_turn(user_id, req.message, reply, req.session_id)
-                _persist_turn(user_id, persistent_sid, req.message, reply)
+                _, did_auto_title = _persist_turn(
+                    user_id, persistent_sid, req.message, reply,
+                )
+                _maybe_schedule_auto_title(
+                    background_tasks, did_auto_title,
+                    user_id, persistent_sid, req.message, reply,
+                )
                 _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
                 await queue.put({"type": "token", "text": reply})
                 await queue.put({
@@ -902,7 +1033,13 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                 reply = build_clarification_response(missing)
                 add_message(req.session_id, "assistant", reply)
                 mem.sync_turn(user_id, req.message, reply, req.session_id)
-                _persist_turn(user_id, persistent_sid, req.message, reply)
+                _, did_auto_title = _persist_turn(
+                    user_id, persistent_sid, req.message, reply,
+                )
+                _maybe_schedule_auto_title(
+                    background_tasks, did_auto_title,
+                    user_id, persistent_sid, req.message, reply,
+                )
                 _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
                 await queue.put({"type": "token", "text": reply})
                 await queue.put({
@@ -951,8 +1088,15 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
             add_message(req.session_id, "assistant", reply)
             mem.sync_turn(user_id, req.message, reply, req.session_id)
 
-            # ── Phase 3.3 + 3.5: persist turn to session, then detect decisions ──
-            new_turn_index = _persist_turn(user_id, persistent_sid, req.message, reply)
+            # ── Phase 3.3 + 3.5 + Round 4: persist turn, schedule auto-title,
+            #    then detect decisions ──
+            new_turn_index, did_auto_title = _persist_turn(
+                user_id, persistent_sid, req.message, reply,
+            )
+            _maybe_schedule_auto_title(
+                background_tasks, did_auto_title,
+                user_id, persistent_sid, req.message, reply,
+            )
             _detect_and_pin_decisions(user_id, persistent_sid, req.message, new_turn_index)
 
             _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)

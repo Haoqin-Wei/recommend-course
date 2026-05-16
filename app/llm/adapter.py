@@ -2,10 +2,12 @@
 LLM Adapter — DeepSeek via OpenAI-compatible SDK
 
 Public functions:
-  1. classify_intent_llm()
-  2. extract_info_llm()         — Channel A
+  1. classify_intent_llm()         — with deterministic rule pre-classifier
+  2. extract_info_llm()            — Channel A
   3. generate_answer_llm()
-  4. reflect_on_history_llm()   — Channel B
+  4. stream_answer_llm()
+  5. reflect_on_history_llm()      — Channel B
+  6. generate_session_title_llm()  — Round 4: auto-title for new sessions
 """
 
 import os
@@ -13,6 +15,20 @@ import json
 import logging
 import asyncio
 from typing import Optional, AsyncIterator
+
+# ── Load .env BEFORE reading any env var ─────────────────
+# Rationale: uvicorn doesn't auto-load .env. If the user starts the
+# server in a fresh shell without `set -a; source .env; set +a`, the
+# DEEPSEEK_API_KEY won't be visible to os.environ — adapter would
+# silently set LLM_ENABLED=False and every LLM call would no-op,
+# falling back to static templates. Loading dotenv here makes the
+# adapter self-sufficient.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # python-dotenv not installed — assume env is set externally.
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +61,50 @@ Given a user message, determine:
 2. entities — any course IDs, professor names, terms, majors, or preferences mentioned
 
 Definitions:
-- "course_recommendation": user wants course suggestions, comparisons, schedule \
-planning, or personalized advice
-- "single_query": user asks a specific factual question about ONE course or ONE \
-professor (prereqs, rating, GE status, conflict check)
-- "off_topic": question is unrelated to courses
+- "course_recommendation": user wants course suggestions, comparisons across \
+multiple courses, schedule planning, or personalized advice ("what should I take?")
+- "single_query": user asks about ONE specific course or ONE specific professor, \
+OR makes a commitment/decision about ONE specific course ("I'll take CS122A", \
+"我决定选 CS122A", "drop CS131"). Decisions go here because the user wants \
+focused analysis of THAT course, not fresh suggestions.
+- "off_topic": question is completely unrelated to courses, professors, or \
+academic planning (weather, sports, general life advice, etc.)
 
-If the user is clearly in a course-selection context and asks about courses, \
-professors, time, prereqs, scheduling, or recommendations, classify as \
-course-related even without the word "recommend."
+DEFAULT BIAS: if the message mentions ANY course code (CS122A, ICS33, etc.), \
+or any course-related verb (选/修/上 / take/enroll/drop), it is NEVER off_topic. \
+Pick course_recommendation or single_query.
+
+Examples — study these to handle similar inputs:
+
+User: "我决定选 CS122A"
+→ {"intent": "single_query", "confidence": 0.95, "entities": {"course_ids": ["CS122A"], "professor_names": [], "term": null, "major": null, "difficulty_preference": null, "recommendation_goal": null}}
+
+User: "I'll take CS161 next quarter"
+→ {"intent": "single_query", "confidence": 0.95, "entities": {"course_ids": ["CS161"], "professor_names": [], "term": null, "major": null, "difficulty_preference": null, "recommendation_goal": null}}
+
+User: "CS131 怎么样？"
+→ {"intent": "single_query", "confidence": 0.95, "entities": {"course_ids": ["CS131"], "professor_names": [], "term": null, "major": null, "difficulty_preference": null, "recommendation_goal": null}}
+
+User: "Tell me about MATH2A"
+→ {"intent": "single_query", "confidence": 0.95, "entities": {"course_ids": ["MATH2A"], "professor_names": [], "term": null, "major": null, "difficulty_preference": null, "recommendation_goal": null}}
+
+User: "How is professor Thornton?"
+→ {"intent": "single_query", "confidence": 0.95, "entities": {"course_ids": [], "professor_names": ["Thornton"], "term": null, "major": null, "difficulty_preference": null, "recommendation_goal": null}}
+
+User: "推荐几门 CS 课"
+→ {"intent": "course_recommendation", "confidence": 0.95, "entities": {"course_ids": [], "professor_names": [], "term": null, "major": "Computer Science", "difficulty_preference": null, "recommendation_goal": null}}
+
+User: "What's a good easy GE I could take?"
+→ {"intent": "course_recommendation", "confidence": 0.95, "entities": {"course_ids": [], "professor_names": [], "term": null, "major": null, "difficulty_preference": "easy", "recommendation_goal": "ge_fulfillment"}}
+
+User: "compare CS122A and CS131"
+→ {"intent": "course_recommendation", "confidence": 0.9, "entities": {"course_ids": ["CS122A", "CS131"], "professor_names": [], "term": null, "major": null, "difficulty_preference": null, "recommendation_goal": null}}
+
+User: "你能帮我看看下学期排课吗"
+→ {"intent": "course_recommendation", "confidence": 0.9, "entities": {"course_ids": [], "professor_names": [], "term": null, "major": null, "difficulty_preference": null, "recommendation_goal": null}}
+
+User: "今天天气怎么样？"
+→ {"intent": "off_topic", "confidence": 0.95, "entities": {"course_ids": [], "professor_names": [], "term": null, "major": null, "difficulty_preference": null, "recommendation_goal": null}}
 
 Respond with ONLY a JSON object, no markdown fences:
 {"intent": "...", "confidence": 0.0-1.0, "entities": {"course_ids": [], \
@@ -157,6 +208,47 @@ If genuinely nothing new: {"preferences": []}
 Maximum 3 preferences per call. Each preference must be one short sentence.
 """
 
+# ── Round 4: session auto-title prompt ───────────────────
+TITLE_SYSTEM_PROMPT = """\
+You generate a short title for a UCI course advisor conversation.
+
+CONSTRAINTS:
+- Output ONLY the title text. No quotes. No "Title:" prefix. No trailing period.
+- Aim for 5–10 characters. Chinese characters count as 1 each.
+- Match the user's language:
+    Chinese user input → Chinese title (English course codes like "CS122A" are fine)
+    English user input → English title
+- Capture the SPECIFIC topic (course ID, question type), not generic terms.
+
+EXAMPLES:
+
+User: "我决定选CS122A"
+Reply: "好的，CS122A 是软件设计课..."
+Title: 选CS122A
+
+User: "推荐几门简单的GE"
+Reply: "几门工作量较轻的 GE 课程..."
+Title: 简单GE推荐
+
+User: "How is Thornton?"
+Reply: "Thornton is highly rated for..."
+Title: Thornton review
+
+User: "compare CS122A and CS131"
+Reply: "Both are upper-division CS..."
+Title: CS122A vs CS131
+
+User: "下学期能不能不上早八"
+Reply: "可以的，避开早 8 点的课..."
+Title: 避开早八排课
+
+BAD examples (do not produce these):
+- "Conversation about courses" (too generic)
+- "标题：选CS122A" (prefix forbidden)
+- "「选 CS122A」" (quotes forbidden)
+- "User wants to take CS122A." (too long, ends with period)
+"""
+
 
 # ── Core LLM call ────────────────────────────────────────
 
@@ -208,12 +300,43 @@ def _parse_json_response(text: str) -> Optional[dict]:
 # ── Public API ───────────────────────────────────────────
 
 async def classify_intent_llm(user_message: str) -> Optional[dict]:
+    """
+    Two-stage intent classifier (Phase 3 polish — stability fix).
+
+    Stage 1: deterministic regex rules cover high-confidence patterns
+    ("我决定选 X", "I'll take Y", "compare X and Y", "推荐课"). When a
+    rule matches, return immediately — zero LLM cost, fully reproducible.
+
+    Stage 2: ambiguous inputs fall through to the LLM classifier with
+    few-shot examples baked into the system prompt. The LLM is still
+    non-deterministic but examples reduce the variance significantly,
+    and crucially, the rules above mean the most common course-related
+    inputs never hit this stage in the first place.
+    """
+    # Stage 1: rules
+    try:
+        from app.llm import intent_rules
+        rule_result = intent_rules.classify_by_rules(user_message)
+        if rule_result:
+            logger.info(
+                "[intent] rule-match (%s) → %s",
+                rule_result.get("rule_id"),
+                rule_result.get("intent"),
+            )
+            return rule_result
+    except Exception as e:
+        # Don't let a regex bug kill the request — log and fall through.
+        logger.warning("intent_rules failed: %s", e)
+
+    # Stage 2: LLM fallback
     if not LLM_ENABLED:
         return None
     try:
         raw = await _call_llm(INTENT_SYSTEM_PROMPT, user_message, json_mode=True)
         result = _parse_json_response(raw)
         if result and "intent" in result:
+            result["source"] = "llm"
+            logger.info("[intent] LLM → %s", result.get("intent"))
             return result
         return None
     except Exception as e:
@@ -396,6 +519,88 @@ async def reflect_on_history_llm(
     except Exception as e:
         logger.error("reflect_on_history_llm failed: %s", e)
         return []
+
+
+# ── Round 4: session auto-title ──────────────────────────
+
+async def generate_session_title_llm(
+    user_message: str,
+    assistant_reply: str,
+) -> Optional[str]:
+    """
+    Round 4 — generate a short (5–10 char) title from the first turn.
+
+    chat.py fires this from a FastAPI BackgroundTask after the first
+    user→assistant exchange in a brand-new session is persisted. It
+    replaces the snippet placeholder title (first 30 chars of the user
+    message) with something compact and topical, e.g.
+        "我决定选CS122A怎么样" → "选CS122A"
+        "推荐几门简单的GE"     → "简单GE推荐"
+
+    Fire-and-forget: failures return None so the caller can keep the
+    snippet title. No retry, no fallback model.
+
+    The assistant reply is truncated to 500 chars before being shown
+    to the model — title generation only needs the gist of the topic,
+    not the entire grounded answer.
+    """
+    if not LLM_ENABLED:
+        return None
+
+    trimmed_reply = (assistant_reply or "")[:500]
+    user_content = (
+        f"USER MESSAGE:\n{user_message}\n\n"
+        f"ADVISOR REPLY (truncated):\n{trimmed_reply}"
+    )
+
+    try:
+        raw = await _call_llm(TITLE_SYSTEM_PROMPT, user_content)
+    except Exception as e:
+        logger.error("generate_session_title_llm failed: %s", e)
+        return None
+
+    if not raw:
+        return None
+
+    # ── Post-processing: strip common LLM verbosity ──
+    title = raw.strip()
+
+    # Take first line only (LLM occasionally adds a second line of
+    # commentary — "Title: X\n(short and specific)")
+    title = title.split("\n", 1)[0].strip()
+
+    # Strip common prefixes
+    for prefix in ("Title:", "title:", "TITLE:", "标题:", "标题：", "Title："):
+        if title.startswith(prefix):
+            title = title[len(prefix):].strip()
+            break
+
+    # Strip surrounding quote pairs (ASCII + CJK + smart quotes + backticks)
+    quote_pairs = (
+        ('"', '"'), ("'", "'"),
+        ("\u201C", "\u201D"),   # smart double "
+        ("\u2018", "\u2019"),   # smart single '
+        ("\u300C", "\u300D"),   # 「 」
+        ("\u300E", "\u300F"),   # 『 』
+        ("\u300A", "\u300B"),   # 《 》
+        ("`", "`"),
+    )
+    for open_q, close_q in quote_pairs:
+        if len(title) >= 2 and title.startswith(open_q) and title.endswith(close_q):
+            title = title[len(open_q):-len(close_q)].strip()
+            break
+
+    # Strip trailing punctuation
+    title = title.rstrip("。.!?！？,;；:：")
+
+    # Safety: hard cap at 30 chars in case the model ignored the length rule
+    if len(title) > 30:
+        title = title[:30].rstrip()
+
+    if not title:
+        return None
+
+    return title
 
 
 # ── Internal helpers ─────────────────────────────────────
