@@ -1,0 +1,28 @@
+{
+  "title": "2025-26 Edition",
+  "school": "",
+  "requirements_text": "A. Three lower-division courses:\nUPPP 4 | Introduction to Urban Studies\nUPPP 5 | Introduction to Urban Planning and Policy\nUPPP 40 | Cities, Communities, and Urban Problems\nor UPPP 41 | Introduction to Labor Studies\nB. Three of the following core upper-division courses:\nUPPP 101 | History of Cities\nUPPP 107 | Urban and Regional Planning\nUPPP 113 | Poverty and Change in Developing Countries\nUPPP 131 | Environmental Sustainability I\nUPPP 146 | Principles of Economics for Planning and Policy\nUPPP 155 | Urban Design Principles\nUPPP 166 | Urban Politics and Policy\nC. Six additional upper-division electives from UPPP 100 -189 or ECON 144A - ECON 144B .\nA. Complete: 1\nUPPP 120 | Introduction to GIS for Planning and Policy\nUPPP 125 | Advanced Geographic Information Systems (GIS)\nUPPP 127 | Spatial Analysis Project\nDepartmental Requirements\nTwelve courses (48 units) as specified below:\nOptional Geographic Information Systems (GIS) Specialization\nCourses taken for the GIS Specialization can be used towards the Urban Studies major. Courses must be taken for a letter grade in order to count for the GIS Specialization.\nNOTE: For students double majoring in Urban Studies and Environmental Science and Policy, the optional Geographic Information Systems Specialization can only be applied to one major.",
+  "course_refs": [
+    "UPPP 4",
+    "UPPP 5",
+    "UPPP 40",
+    "UPPP 41",
+    "UPPP 101",
+    "UPPP 107",
+    "UPPP 113",
+    "UPPP 131",
+    "UPPP 146",
+    "UPPP 155",
+    "UPPP 166",
+    "UPPP 100",
+    "ECON 144A",
+    "ECON 144B",
+    "UPPP 120",
+    "UPPP 125",
+    "UPPP 127"
+  ],
+  "label": "Urban Studies, B.A.",
+  "degree_type": "B.A.",
+  "url": "https://catalogue.uci.edu/schoolofsocialecology/departmentofurbanplanningandpublicpolicy/urbanstudies_ba/",
+  "slug": "urbanstudies_ba"
+}

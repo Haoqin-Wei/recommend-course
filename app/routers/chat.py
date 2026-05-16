@@ -52,6 +52,12 @@ from app.modules.answer import (
 from app.modules.followup import generate_followups, generate_single_query_followups
 from app.memory import get_memory_manager
 
+# ── Phase 3.3 / 3.5 — session storage + decision detection ──
+from app.data import sessions as sessions_data
+from app.modules import decision_detector
+from app.modules import state as state_module
+# ─────────────────────────────────────────────────────────────
+
 # ── Validation Phase 1 ───────────────────────────────────
 from app.catalog.term import Term, get_term_registry
 from app.catalog.cache import get_catalog
@@ -65,8 +71,18 @@ logging.basicConfig(level=logging.INFO)
 
 router = APIRouter()
 
+# Scan for course IDs anywhere in a string.
+#
+# We use explicit ASCII look-arounds instead of \b because Python's
+# regex \b is Unicode-aware by default: in "我决定选CS122A", the
+# character 选 is classified as a "word" character (it's alphanumeric
+# in Unicode), so \b between 选 and CS does NOT match. The same
+# problem hits course IDs sandwiched between Chinese characters
+# anywhere ("选CS122A课"). The look-arounds below say "not preceded /
+# followed by an ASCII letter or digit" — Chinese characters are
+# fine as neighbors.
 _COURSE_ID_SCAN = re.compile(
-    r'\b[A-Z][A-Z0-9]{1,7}\d+[A-Z]?\b',
+    r'(?<![A-Za-z0-9])[A-Z]{1,8}\d+[A-Z]?(?![A-Za-z0-9])',
     re.IGNORECASE,
 )
 
@@ -87,6 +103,175 @@ class ChatResponse(BaseModel):
     session_state: dict = {}
     pending_schedule: list[dict] = []
     validation_report: Optional[dict] = None            # 新增
+
+
+# ── Phase 3.3 — session_id resolution ────────────────────
+#
+# The frontend still sends "demo_session" (legacy hardcoded) until
+# Round 3 lands. We translate that into a real persistent session_id
+# (sess_XXXXXX) by either reusing the in-memory mapping or auto-creating
+# one. The persistent_session_id is cached on the in-memory session
+# dict so subsequent requests in the same server lifetime reuse it.
+#
+# After Round 3, the frontend sends real session_ids directly and this
+# resolution becomes a no-op (the real id is used as-is).
+
+def _resolve_session_id(
+    req_session_id: str,
+    user_id: str,
+    term_str: Optional[str] = None,
+) -> str:
+    """
+    Translate the request's session_id into a persistent session_id
+    on disk. Returns a session_id starting with 'sess_'.
+    """
+    # Case 1: frontend already sent a real session_id and it exists
+    if req_session_id and req_session_id.startswith("sess_"):
+        try:
+            sessions_data.get_session_meta(user_id, req_session_id)
+            return req_session_id
+        except (sessions_data.SessionNotFound, sessions_data.InvalidId):
+            logger.warning(
+                "[stream] requested session_id %r not found; falling back to auto-create",
+                req_session_id,
+            )
+
+    # Case 2: legacy request — check in-memory mapping first
+    in_mem = state_module._sessions.get(req_session_id, {})
+    cached = in_mem.get("persistent_session_id")
+    if cached:
+        try:
+            sessions_data.get_session_meta(user_id, cached)
+            return cached
+        except sessions_data.SessionNotFound:
+            # Session was deleted externally — fall through to recreate
+            pass
+
+    # Case 3: no usable session — create a new one and cache the mapping
+    new_sid = sessions_data.create_session(
+        user_id,
+        title="New conversation",
+        term_scope=term_str,
+    )
+    if req_session_id not in state_module._sessions:
+        state_module._sessions[req_session_id] = state_module._make_empty_session(req_session_id)
+    state_module._sessions[req_session_id]["persistent_session_id"] = new_sid
+    logger.info(
+        "[stream] auto-created persistent session %s (legacy key=%r)",
+        new_sid, req_session_id,
+    )
+    return new_sid
+
+
+def _hydrate_state_from_session(
+    user_id: str,
+    persistent_session_id: str,
+    in_mem_session: dict,
+) -> None:
+    """
+    On first use of a persistent session in this server lifetime, copy
+    its stored turns into in-memory state.history so existing code
+    (add_message, etc.) keeps working.
+
+    Idempotent: only hydrates if state.history is empty.
+    """
+    if in_mem_session.get("history"):
+        return
+    try:
+        turns = sessions_data.read_turns(user_id, persistent_session_id)
+    except sessions_data.SessionNotFound:
+        return
+    in_mem_session["history"] = [
+        {"role": t.get("role"), "content": t.get("content")}
+        for t in turns
+        if t.get("role") in ("user", "assistant")
+    ]
+    if turns:
+        logger.info(
+            "[stream] hydrated state.history with %d turns from session %s",
+            len(in_mem_session["history"]), persistent_session_id,
+        )
+
+
+def _persist_turn(
+    user_id: str,
+    persistent_sid: str,
+    user_msg: str,
+    assistant_reply: str,
+) -> int:
+    """
+    Append user + assistant turns to sessions/{sid}/turns.jsonl.
+    Returns the turn_index of the assistant reply (used for decision pinning).
+    Failures here are logged but don't break the response.
+    """
+    try:
+        sessions_data.append_turn(user_id, persistent_sid, "user", user_msg)
+        idx = sessions_data.append_turn(user_id, persistent_sid, "assistant", assistant_reply)
+        return idx
+    except Exception as e:
+        logger.warning("[stream] persist_turn failed for %s: %s", persistent_sid, e)
+        return 0
+
+
+def _detect_and_pin_decisions(
+    user_id: str,
+    persistent_sid: str,
+    user_msg: str,
+    turn_index: int,
+) -> None:
+    """
+    Run the heuristic decision detector on the user's latest message.
+    Append any new decisions to session.decisions (idempotent against
+    existing on lower-case match). Failures are logged but not fatal.
+    """
+    try:
+        detected = decision_detector.detect_decisions(user_msg)
+        for d in detected:
+            result = sessions_data.append_decision(
+                user_id, persistent_sid, d, from_turn=turn_index,
+            )
+            if not result.get("already_existed"):
+                logger.info("[stream] pinned decision %r in session %s (turn %d)",
+                            d, persistent_sid, turn_index)
+    except Exception as e:
+        logger.warning("[stream] decision-pinning failed: %s", e)
+
+
+def _resolve_referenced_course(recent_turns: list[dict]) -> Optional[str]:
+    """
+    Scan recent conversation turns (newest first) for a course ID.
+
+    Used by _handle_single_query when the current user message contains
+    no explicit course ID but is likely a follow-up referring to
+    something earlier ("那个课", "the first one", "上面提到的那门").
+
+    Prefers user-side mentions (the subject the user steered the
+    conversation toward) over assistant-side mentions (the assistant
+    might rattle off many courses in a recommendation reply, only one
+    of which is what the user wants more info on).
+
+    Returns the most recent course ID seen, or None.
+    """
+    if not recent_turns:
+        return None
+
+    # First pass: walk user turns newest-first
+    for turn in reversed(recent_turns):
+        if turn.get("role") != "user":
+            continue
+        matches = _COURSE_ID_SCAN.findall(turn.get("content") or "")
+        if matches:
+            return matches[0].upper()
+
+    # Second pass: fall back to assistant turns if no user mention
+    for turn in reversed(recent_turns):
+        if turn.get("role") != "assistant":
+            continue
+        matches = _COURSE_ID_SCAN.findall(turn.get("content") or "")
+        if matches:
+            return matches[0].upper()
+
+    return None
 
 
 # ── Channel A: hard-fact capture (every turn) ────────────
@@ -341,6 +526,8 @@ def _build_card(item: dict, state: dict) -> dict:
         "prereq_met": item.get("prereq_met", True),
         "prereq_missing": item.get("prereq_missing", []),
         "has_conflict": item.get("has_conflict", False),
+        "conflict_summary": item.get("conflict_summary", ""),
+        "conflict_status":  item.get("conflict_status",  "none"),
         "grade_distribution": item.get("grade_distribution"),
         "sections": item.get("sections", []),
         "reason": ". ".join(reasons) if reasons else "Solid option.",
@@ -355,6 +542,10 @@ async def _handle_recommendation(
     term_str=None,                                      # 新增
     system_prompt=None,                                 # 新增
     on_token=None,                                      # 新增：流式回调
+    # ── Phase 3.4 ─────────────────────────────────────
+    recent_turns: Optional[list[dict]] = None,
+    decisions: Optional[list[dict]] = None,
+    summary: Optional[str] = None,
 ):
     from app.llm.adapter import generate_answer_llm
     results = query_course_recommendations(
@@ -375,6 +566,9 @@ async def _handle_recommendation(
             user_msg, results, state,
             memory_context=memory_context,
             system_prompt_override=sp_override,
+            recent_turns=recent_turns,
+            decisions=decisions,
+            summary=summary,
         ):
             chunks.append(chunk)
             await on_token(chunk)
@@ -385,6 +579,9 @@ async def _handle_recommendation(
             user_msg, results, state,
             memory_context=memory_context,
             system_prompt_override=sp_override,             # 新增
+            recent_turns=recent_turns,
+            decisions=decisions,
+            summary=summary,
         )
 
     if answer:
@@ -448,7 +645,10 @@ async def _handle_recommendation(
     return answer, cards, followups, validation_dict
 
 
-async def _handle_single_query(message, state, memory_context=None, system_prompt=None, on_token=None):
+async def _handle_single_query(message, state, memory_context=None, system_prompt=None, on_token=None,
+                               recent_turns: Optional[list[dict]] = None,
+                               decisions: Optional[list[dict]] = None,
+                               summary: Optional[str] = None):
     from app.llm.adapter import generate_answer_llm
     sp_override = system_prompt.strip() if (system_prompt and system_prompt.strip()) else None
 
@@ -459,6 +659,9 @@ async def _handle_single_query(message, state, memory_context=None, system_promp
                 message, payload_data, state,
                 memory_context=memory_context,
                 system_prompt_override=sp_override,
+                recent_turns=recent_turns,
+                decisions=decisions,
+                summary=summary,
             )
         from app.llm.adapter import stream_answer_llm
         chunks: list[str] = []
@@ -466,6 +669,9 @@ async def _handle_single_query(message, state, memory_context=None, system_promp
             message, payload_data, state,
             memory_context=memory_context,
             system_prompt_override=sp_override,
+            recent_turns=recent_turns,
+            decisions=decisions,
+            summary=summary,
         ):
             chunks.append(chunk)
             await on_token(chunk)
@@ -508,6 +714,55 @@ async def _handle_single_query(message, state, memory_context=None, system_promp
                 if on_token:
                     await on_token(ans)
             return ans, [], []
+
+    # ── Phase 3.4 polish: referential follow-up resolution ──
+    # The user's current message has no explicit course ID or
+    # professor name — but they're likely referring to something we
+    # discussed earlier ("那个课怎么样" / "what about that course").
+    #
+    # Strategy:
+    #   1. Scan recent_turns for the most recently mentioned course ID
+    #   2. If found → run query_single_course on it so we get REAL
+    #      grade distribution + sections (not LLM-fabricated stats)
+    #   3. Pass the full data to the LLM, which now has both history
+    #      and real data — produces a grounded answer + a course card
+    #   4. If no course in history either → fall through to LLM with
+    #      history alone, then to the hardcoded help message
+    if recent_turns:
+        referenced = _resolve_referenced_course(recent_turns)
+        if referenced:
+            data = query_single_course(referenced, state.get("term"))
+            if data:
+                logger.info("[single_query] referential resolve %r → %s (full data)",
+                            message[:40], referenced)
+                card = {
+                    "course_id": data["course"]["course_id"],
+                    "title": data["course"]["title"],
+                    "units": data["course"]["units"],
+                    "department": data["course"].get("department", ""),
+                    "description": data["course"].get("description", ""),
+                    "ge_category": data["course"].get("ge_category"),
+                    "major_requirement": data["course"].get("major_requirement", []),
+                    "prereq_met": True, "prereq_missing": [],
+                    "has_conflict": False,
+                    "grade_distribution": data.get("grade_distribution"),
+                    "sections": data.get("sections", []),
+                    "reason": "",
+                }
+                ans = await _call_llm(data)
+                if ans:
+                    fu = generate_single_query_followups(referenced, state)
+                    return ans, [card], fu
+                # LLM empty → fall through to history-only call
+
+        # No course in history (or query returned None) — try LLM
+        # with history alone. It may still produce a useful answer
+        # for non-course follow-ups ("你刚才的建议靠谱吗").
+        ans = await _call_llm({})
+        if ans:
+            return ans, [], []
+        # else fall through to fallback
+
     fallback = ("I'm not sure which course or professor you mean. "
                 "Try a course ID like ICS33 or a professor name.")
     if on_token:
@@ -571,15 +826,20 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
             mem = get_memory_manager()
             user_id = req.student_id or "demo_001"
 
+            # ── Phase 3.3: resolve the request's session_id to a persistent one ──
+            persistent_sid = _resolve_session_id(req.session_id, user_id, req.term)
+
             session = get_or_create_session(req.session_id)
+            _hydrate_state_from_session(user_id, persistent_sid, session)
             if not session.get("major") and req.student_id:
                 load_student_into_session(req.session_id, req.student_id)
                 session = get_or_create_session(req.session_id)
 
             add_message(req.session_id, "user", req.message)
             mem.on_turn_start(req.session_id, user_id)
-            logger.info("[stream turn %d] user=%s msg=%r",
-                        mem.turn_count(req.session_id), user_id, req.message[:120])
+            logger.info("[stream turn %d] user=%s session=%s msg=%r",
+                        mem.turn_count(req.session_id), user_id,
+                        persistent_sid, req.message[:120])
 
             # Channel A
             extracted = await extract_info_from_message(req.message, session)
@@ -605,15 +865,29 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                 "prefetched_context": mem.prefetch(req.message, user_id),
             }
 
+            # ── Phase 3.4: load structured context layers from sessions.py ──
+            try:
+                session_meta = sessions_data.get_session_meta(user_id, persistent_sid)
+                recent_turns = sessions_data.read_turns(user_id, persistent_sid)
+                decisions    = session_meta.get("decisions") or []
+                summary      = session_meta.get("summary")
+            except sessions_data.SessionNotFound:
+                session_meta = {}
+                recent_turns = []
+                decisions    = []
+                summary      = None
+
             # ── Short paths: deliver whole reply at once ──
             if intent == "off_topic":
                 reply = generate_off_topic_response(req.message)
                 add_message(req.session_id, "assistant", reply)
                 mem.sync_turn(user_id, req.message, reply, req.session_id)
+                _persist_turn(user_id, persistent_sid, req.message, reply)
                 _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
                 await queue.put({"type": "token", "text": reply})
                 await queue.put({
                     "type": "meta",
+                    "session_id": persistent_sid,
                     "intent": intent,
                     "cards": [],
                     "followups": [],
@@ -628,10 +902,12 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                 reply = build_clarification_response(missing)
                 add_message(req.session_id, "assistant", reply)
                 mem.sync_turn(user_id, req.message, reply, req.session_id)
+                _persist_turn(user_id, persistent_sid, req.message, reply)
                 _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
                 await queue.put({"type": "token", "text": reply})
                 await queue.put({
                     "type": "meta",
+                    "session_id": persistent_sid,
                     "intent": intent,
                     "cards": [],
                     "followups": [],
@@ -657,6 +933,9 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                     req.message, state, memory_context,
                     system_prompt=req.system_prompt,
                     on_token=on_token,
+                    recent_turns=recent_turns,
+                    decisions=decisions,
+                    summary=summary,
                 )
             else:
                 reply, cards, followups, validation_dict = await _handle_recommendation(
@@ -664,14 +943,23 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                     session_id=req.session_id, term_str=req.term,
                     system_prompt=req.system_prompt,
                     on_token=on_token,
+                    recent_turns=recent_turns,
+                    decisions=decisions,
+                    summary=summary,
                 )
 
             add_message(req.session_id, "assistant", reply)
             mem.sync_turn(user_id, req.message, reply, req.session_id)
+
+            # ── Phase 3.3 + 3.5: persist turn to session, then detect decisions ──
+            new_turn_index = _persist_turn(user_id, persistent_sid, req.message, reply)
+            _detect_and_pin_decisions(user_id, persistent_sid, req.message, new_turn_index)
+
             _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
 
             await queue.put({
                 "type": "meta",
+                "session_id": persistent_sid,
                 "intent": intent,
                 "cards": cards,
                 "followups": followups,

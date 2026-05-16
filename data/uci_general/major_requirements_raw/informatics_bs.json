@@ -1,0 +1,32 @@
+{
+  "title": "2025-26 Edition",
+  "school": "",
+  "requirements_text": "Lower-division\nA. Select one of the following series:\nI&C SCI 31 - 32 - 33 | Introduction to Programming and Programming with Software Libraries and Intermediate Programming\nor\nI&C SCI H32 - 33 | Python Programming and Libraries (Accelerated) and Intermediate Programming\nB. Complete:\nI&C SCI 45J | Programming in Java as a Second Language\nIN4MATX 43 | Introduction to Software Engineering\nI&C SCI 6B | Boolean Logic and Discrete Structures\nSTATS 7 | Basic Statistics\nor STATS 67 | Introduction to Probability and Statistics for Computer Science\nUpper-division\nA. Informatics Core Requirements:\nIN4MATX 113 | Requirements Analysis and Engineering\nIN4MATX 121 | Software Design: Applications\nIN4MATX 131 | Human Computer Interaction\nIN4MATX 151 | Project Management\nIN4MATX 161 | Social Analysis of Computing\nIN4MATX 191A - 191B | Senior Design Project and Senior Design Project\nB. Select six 4-unit courses from IN4MATX 100-190, GDIM 127 , GDIM 131 , GDIM 165\nC. Select four 4-unit courses from the following: COMPSCI 100-199, GDIM 51 , 55 , 100-199, IN4MATX 100-199, I&C SCI 100-199, STATS 100-199. Note: At most, two courses (8 units) may be honors research (H198) or an independent study (199). Courses used to satisfy Section B may not also be used to satisfy Section C.\nMajor Requirements",
+  "course_refs": [
+    "I&C SCI 31",
+    "I&C SCI 32",
+    "I&C SCI 33",
+    "I&C SCI H32",
+    "I&C SCI 45J",
+    "IN4MATX 43",
+    "I&C SCI 6B",
+    "STATS 7",
+    "STATS 67",
+    "IN4MATX 113",
+    "IN4MATX 121",
+    "IN4MATX 131",
+    "IN4MATX 151",
+    "IN4MATX 161",
+    "IN4MATX 191A",
+    "IN4MATX 191B",
+    "GDIM 127",
+    "GDIM 131",
+    "GDIM 165",
+    "GDIM 51",
+    "GDIM 55"
+  ],
+  "label": "Informatics, B.S.",
+  "degree_type": "B.S.",
+  "url": "https://catalogue.uci.edu/donaldbrenschoolofinformationandcomputersciences/departmentofinformatics/informatics_bs/",
+  "slug": "informatics_bs"
+}

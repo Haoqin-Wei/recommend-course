@@ -23,6 +23,48 @@ Directions per SKILL.md:
 Generate 2–3 contextual follow-ups based on the current results and state.
 """
 
+from typing import Optional
+
+
+def _pick_compare_pair(primary: list[dict]) -> Optional[tuple[str, str]]:
+    """
+    Pick two courses worth comparing side-by-side.
+
+    Prefers two courses from the *same department* (e.g. CS122A + CS131
+    rather than CS122A + ACENG139W), since cross-domain comparisons are
+    rarely what the student wants. Falls back to primary[0:2] if no
+    same-dept pair exists.
+
+    Returns None if fewer than 2 primary items.
+    """
+    if len(primary) < 2:
+        return None
+
+    by_dept: dict[str, list[str]] = {}
+    for item in primary:
+        c = item.get("course", {})
+        dept = c.get("department", "") or ""
+        cid = c.get("course_id", "")
+        if cid:
+            by_dept.setdefault(dept, []).append(cid)
+
+    # Walk primary in rank order; first department with ≥2 entries wins.
+    seen_dept: set[str] = set()
+    for item in primary:
+        dept = item.get("course", {}).get("department", "") or ""
+        if dept in seen_dept:
+            continue
+        seen_dept.add(dept)
+        ids = by_dept.get(dept, [])
+        if len(ids) >= 2:
+            return ids[0], ids[1]
+
+    # No same-dept pair → fall back to top two ranked.
+    return (
+        primary[0]["course"]["course_id"],
+        primary[1]["course"]["course_id"],
+    )
+
 
 def generate_followups(
     query_results: dict,
@@ -38,10 +80,9 @@ def generate_followups(
     flagged = query_results.get("flagged", [])
 
     # ── If we gave recommendations, suggest a side-by-side ──
-    if len(primary) >= 2:
-        c1 = primary[0]["course"]["course_id"]
-        c2 = primary[1]["course"]["course_id"]
-        followups.append(f"Compare {c1} and {c2} side by side")
+    pair = _pick_compare_pair(primary)
+    if pair:
+        followups.append(f"Compare {pair[0]} and {pair[1]} side by side")
 
     # ── Suggest conflict check if user already has a schedule ──
     if primary and session_state.get("selected_courses"):

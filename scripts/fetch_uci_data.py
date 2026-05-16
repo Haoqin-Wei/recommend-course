@@ -292,6 +292,141 @@ def fetch_courses_by_department(dept: str, out_dir: str, sleep: float):
           f"{added} new / {total} total in {out_path}")
 
 
+def fetch_all_courses(out_dir: str, sleep: float):
+    """
+    Fetch every UCI course by iterating through known department codes.
+
+    Why dept-by-dept rather than a single unfiltered call: the Anteater
+    /courses endpoint without a `department` filter caps at 100 results
+    and does not return `nextCursor`, so true pagination only works when
+    filtering by department. Iterating known dept codes side-steps that.
+
+    Strategy:
+      1. Discover departments already in courses.csv (seed list)
+      2. Union with a curated registry of UCI dept codes (catches the
+         long tail we haven't fetched yet — humanities, arts, etc.)
+      3. Hit /courses?department=X for each. 404s and empties are
+         expected for some — log and continue.
+      4. Merge into courses.csv after each dept (durability on Ctrl-C).
+    """
+    api_key = _get_api_key()
+    out_path = Path(out_dir) / "courses.csv"
+
+    seed = set(_discover_departments_from_csv(out_dir))
+    all_depts = sorted(seed | KNOWN_UCI_DEPARTMENTS)
+
+    print(f"Iterating {len(all_depts)} departments "
+          f"({len(seed)} from existing CSV + {len(KNOWN_UCI_DEPARTMENTS - seed)} "
+          f"net-new from registry)\n")
+
+    grand_total = 0
+    grand_new = 0
+    empties: list[str] = []
+    failures: list[tuple[str, str]] = []
+
+    for i, dept in enumerate(all_depts, 1):
+        rows: list[dict] = []
+        cursor = None
+        page = 0
+        try:
+            while True:
+                params: dict = {"department": dept, "take": 100}
+                if cursor:
+                    params["cursor"] = cursor
+                data = _request("/courses", params=params, api_key=api_key)
+                if data is None:
+                    break
+                if isinstance(data, list):
+                    items = data
+                    cursor = None
+                else:
+                    items = data.get("items") or []
+                    cursor = data.get("nextCursor")
+                for c in items:
+                    rows.append(_course_to_row(c))
+                page += 1
+                if not cursor or not items:
+                    break
+                time.sleep(sleep)
+        except Exception as e:
+            failures.append((dept, f"{type(e).__name__}: {e}"))
+            print(f"  [{i:3}/{len(all_depts)}] ✗ {dept!r:24} ({e})")
+            continue
+
+        if not rows:
+            empties.append(dept)
+            print(f"  [{i:3}/{len(all_depts)}] ⏭  {dept!r:24} no courses")
+            time.sleep(sleep)
+            continue
+
+        added, total = _merge_into_csv(
+            out_path, rows, COURSES_COLUMNS, "course_id",
+        )
+        grand_total += len(rows)
+        grand_new += added
+        print(f"  [{i:3}/{len(all_depts)}] ✓ {dept!r:24} "
+              f"+{len(rows):3} fetched · {added:3} new · {total} total")
+        time.sleep(sleep)
+
+    print(f"\n✅ Done. {grand_total} courses fetched, {grand_new} net-new.")
+    if empties:
+        print(f"   ({len(empties)} dept codes returned empty — typical for "
+              f"discontinued codes)")
+    if failures:
+        print(f"\n❌ {len(failures)} departments failed:")
+        for dept, err in failures[:10]:
+            print(f"   - {dept!r}: {err}")
+        if len(failures) > 10:
+            print(f"   … plus {len(failures) - 10} more")
+
+
+# Curated UCI department-code registry. Anteater API uses these exact strings
+# (preserve spaces and special chars). Compiled from UCI Catalogue + manual
+# inspection. 404 and empty responses are handled gracefully, so listing a
+# slightly-off code costs nothing.
+KNOWN_UCI_DEPARTMENTS: set[str] = {
+    # ── Donald Bren School of Information and Computer Sciences ──
+    "COMPSCI", "I&C SCI", "IN4MATX", "STATS", "SWE",
+    # ── Henry Samueli School of Engineering ──
+    "BME", "CBEMS", "CEE", "CSE", "EECS", "ENGR",
+    "ENGRCEE", "ENGRMAE", "ENGRMSE", "MAE", "MSE",
+    # ── School of Physical Sciences ──
+    "CHEM", "EARTHSS", "MATH", "PHY SCI", "PHYSICS",
+    # ── Charlie Dunlop School of Biological Sciences ──
+    "BIO SCI", "BIOCHEM", "DEV BIO", "ECO EVO", "M&MG", "MOL BIO",
+    "NEURBIO", "PSY BEH", "PSY SCI",
+    # ── School of Humanities ──
+    "AC ENG", "AFAM", "ARABIC", "ART HIS", "ASIANAM", "ASIANST",
+    "CHC/LAT", "CHINESE", "CLASSIC", "COM LIT",
+    "E ASIAN", "ENGLISH", "EURO ST", "FLM&MDA", "FREN",
+    "GEN&SEX", "GERMAN", "GLBLCLT", "GLBLME", "GREEK", "HEBREW",
+    "HINDI", "HISTORY", "HUMAN", "HUMARTS",
+    "ITALIAN", "JAPANSE", "JEWISH", "KOREAN", "LATIN", "LIT JRN",
+    "PERSIAN", "PHILOS", "PORTUG", "REL STD", "RUSSIAN", "SPANISH",
+    "VIETMSE", "WRITING",
+    # ── School of Social Sciences ──
+    "ANTHRO", "COG SCI", "ECON", "INTL ST", "LANG SCI", "LSCI",
+    "POL SCI", "PSYCH", "SOC SCI", "SOCIOL",
+    # ── School of Social Ecology ──
+    "CRIM", "PP&D", "SOCECOL", "UPPP",
+    # ── Claire Trevor School of the Arts ──
+    "ART", "DANCE", "DRAMA", "MUSIC",
+    # ── Paul Merage School of Business ──
+    "ACCT", "MGMT", "MGMT EP", "MGMT FE", "MGMT HC", "MGMT MBA", "MGMTPHD",
+    # ── Joe C. Wen School of Population and Public Health ──
+    "PUBHLTH",
+    # ── Sue and Bill Gross School of Nursing ──
+    "NUR SCI",
+    # ── School of Pharmacy and Pharmaceutical Sciences ──
+    "PHRMSCI",
+    # ── School of Education ──
+    "EDUC",
+    # ── Interdisciplinary / cross-listed ──
+    "EAP", "GDIM", "HONORS", "UCDC", "UNI AFF", "UNI STU",
+    "GLBL ST", "SOC ECOL", "INNO", "MGMT FIN",
+}
+
+
 def fetch_courses_from_sections(out_dir: str, sleep: float, limit: Optional[int]):
     api_key = _get_api_key()
     sections_csv = Path(out_dir) / "sections.csv"
@@ -649,6 +784,8 @@ def main():
     g.add_argument("--from-sections", action="store_true",
                    help="Fetch every course that appears in sections.csv")
     g.add_argument("--department", help="Fetch all courses in a department")
+    g.add_argument("--all-departments", action="store_true",
+                   help="Fetch the entire UCI catalog (~6000 courses, ~30 min)")
     pc.add_argument("--out-dir", default="data/uci")
     pc.add_argument("--sleep", type=float, default=0.1)
     pc.add_argument("--limit", type=int, default=None,
@@ -678,6 +815,8 @@ def main():
             fetch_courses_from_sections(args.out_dir, args.sleep, args.limit)
         elif args.department:
             fetch_courses_by_department(args.department, args.out_dir, args.sleep)
+        elif args.all_departments:
+            fetch_all_courses(args.out_dir, args.sleep)
 
     elif args.cmd == "websoc":
         fetch_websoc(

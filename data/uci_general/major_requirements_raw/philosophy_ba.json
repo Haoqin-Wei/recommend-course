@@ -1,0 +1,27 @@
+{
+  "title": "2025-26 Edition",
+  "school": "",
+  "requirements_text": "A. Select one of the following:\nPHILOS 1 | Introduction to Philosophy\nPHILOS 2 | Puzzles and Paradoxes\nPHILOS 3 | Technology and Society\nPHILOS 4 | Introduction to Ethics\nPHILOS 5 | Contemporary Moral Problems\nB. Select one of the following:\nPHILOS 30 | Introduction to Symbolic Logic\nPHILOS 104 | Introduction to Logic\nC. Select two of the following:\nPHILOS 10 | History of Ancient Philosophy\nPHILOS 12 | History of Modern Philosophy\nPHILOS 13 | History of Contemporary Philosophy\nD. Complete:\nPHILOS 101 | Introduction to Metaphysics\nPHILOS 102W | Introduction to the Theory of Knowledge\nPHILOS 103 | Introduction to Moral Philosophy\nE. Select five of the following: 1\nPHILOS 100W | Writing Philosophy\nPHILOS 105–199\nDepartmental Requirements for the Major\nStudents planning to pursue graduate school are strongly advised to take PHILOS 105A and PHILOS 105B .\nResidence Requirement: At least five upper-division courses required for the major must be completed successfully at UCI.",
+  "course_refs": [
+    "PHILOS 1",
+    "PHILOS 2",
+    "PHILOS 3",
+    "PHILOS 4",
+    "PHILOS 5",
+    "PHILOS 30",
+    "PHILOS 104",
+    "PHILOS 10",
+    "PHILOS 12",
+    "PHILOS 13",
+    "PHILOS 101",
+    "PHILOS 102W",
+    "PHILOS 103",
+    "PHILOS 100W",
+    "PHILOS 105A",
+    "PHILOS 105B"
+  ],
+  "label": "Philosophy, B.A.",
+  "degree_type": "B.A.",
+  "url": "https://catalogue.uci.edu/schoolofhumanities/departmentofphilosophy/philosophy_ba/",
+  "slug": "philosophy_ba"
+}

@@ -550,6 +550,14 @@ input { font-family: inherit; }
   background: var(--danger-soft);
   color: var(--danger);
 }
+.cc-tag-conflict-all {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.cc-tag-conflict-some {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
 .cc-reason {
   font-size: var(--text-secondary-size);
   color: var(--text-tertiary);
@@ -1114,6 +1122,304 @@ input { font-family: inherit; }
   font-size: 11px;
   color: var(--text-secondary);
 }
+/* ═══════════════════════════════════════════════════════
+   Profile popover + Memory modal (Phase 3.1)
+   ═══════════════════════════════════════════════════════ */
+
+/* Layout: make left-panel a flex column so we can pin the avatar bar
+   to the bottom while existing content scrolls. */
+.left-panel {
+  display: flex;
+  flex-direction: column;
+}
+.left-panel-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.user-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  margin: var(--space-3) calc(var(--space-3) * -1) calc(var(--space-3) * -1);
+  border-top: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: background 0.12s;
+  position: relative;
+}
+.user-bar:hover { background: var(--bg-elevated); }
+.user-bar-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+.user-bar-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-bar-chev {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  opacity: 0.6;
+}
+
+/* Popover menu — appears above the user-bar when clicked */
+.user-popover {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: var(--space-3);
+  right: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: var(--space-2);
+  display: none;
+  z-index: 100;
+}
+.user-popover.open { display: block; }
+.user-popover-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  transition: background 0.1s;
+}
+.user-popover-item:hover { background: var(--bg-primary); }
+.user-popover-item svg {
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+}
+.user-popover-sep {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: var(--space-2) 0;
+}
+.user-popover-email {
+  padding: var(--space-2) var(--space-3);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* ── Memory modal ──────────────────────────────────────── */
+.memory-modal-content {
+  width: min(92vw, 560px);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.memory-section {
+  padding: var(--space-4) 0;
+}
+.memory-section + .memory-section {
+  border-top: 1px solid var(--border-subtle);
+}
+.memory-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-tertiary);
+  margin-bottom: var(--space-3);
+}
+
+/* About-you summary line */
+.memory-about {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+.memory-about-line {
+  color: var(--text-secondary);
+}
+.memory-about-line strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Major-progress block */
+.memory-progress-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: var(--space-3);
+}
+.memory-progress-bar {
+  height: 6px;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: var(--space-3);
+}
+.memory-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+.memory-progress-rows {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-2) var(--space-3);
+  font-size: 12px;
+}
+.memory-progress-rows .label   { color: var(--text-secondary); }
+.memory-progress-rows .count   { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.memory-progress-rows .done    { color: var(--success); }
+
+/* Preferences list */
+.memory-pref-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.memory-pref-row:last-child { border-bottom: 0; }
+.memory-pref-text {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: var(--leading-normal);
+}
+.memory-pref-when {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+.memory-pref-forget {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-tertiary);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: color 0.1s, background 0.1s;
+}
+.memory-pref-forget:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.memory-empty {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  padding: var(--space-2) 0;
+}
+.memory-forget-all {
+  margin-top: var(--space-4);
+  width: 100%;
+  padding: var(--space-3);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.memory-forget-all:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ── Sidebar stats card (clickable; opens Profile) ───── */
+.sb-stats {
+  display: flex;
+  justify-content: space-around;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  margin: var(--space-3) 0;
+  background: var(--bg-elevated);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+  width: 100%;
+  text-align: inherit;
+  color: inherit;
+  font: inherit;
+}
+.sb-stats:hover {
+  border-color: var(--border-subtle);
+  background: var(--bg-primary);
+}
+.sb-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 9px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  letter-spacing: 0.08em;
+  flex: 1;
+}
+.sb-stat-num {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 2px;
+  line-height: 1;
+}
+
+/* Waitlist dot — yellow-ish, in between "in progress" and "not yet". */
+.dot-waitlist {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+  margin-right: var(--space-2);
+  vertical-align: middle;
+}
+
+/* ── Profile modal ────────────────────────────────────── */
+.profile-modal-content {
+  width: min(92vw, 600px);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+.profile-course-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.profile-course-grid .left-course-tag {
+  margin: 0;
+  white-space: nowrap;
+}
+.profile-section-count {
+  display: inline-block;
+  margin-left: var(--space-2);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
 </style>
 </head>
 <body>
@@ -1149,29 +1455,68 @@ input { font-family: inherit; }
 
   <!-- ── Left Panel ─────────────────────────────── -->
   <aside class="left-panel">
+   <div class="left-panel-scroll">
     <div class="profile-block">
-      <div class="profile-avatar">DS</div>
-      <div class="profile-name">Demo Student</div>
-      <div class="profile-meta">Computer Science</div>
-      <div class="profile-meta">Sophomore · Class of 2027</div>
+      <div class="profile-avatar" id="sb-avatar">··</div>
+      <div class="profile-name"   id="sb-name">Loading…</div>
+      <div class="profile-meta"   id="sb-major"></div>
+      <div class="profile-meta"   id="sb-yearclass"></div>
     </div>
 
-    <div class="left-section-label">Completed</div>
-    <div class="left-courses">
-      <div class="left-course-tag"><span class="dot-complete"></span> ICS 31</div>
-      <div class="left-course-tag"><span class="dot-complete"></span> ICS 32</div>
-    </div>
-
-    <div class="left-section-label">Enrolled</div>
-    <div class="left-courses">
-      <div class="left-course-tag"><span class="dot-enrolled"></span> ICS 33</div>
-    </div>
+    <button class="sb-stats" onclick="openProfile()" title="View course details">
+      <div class="sb-stat">
+        <div class="sb-stat-num" id="sb-num-completed">·</div>
+        completed
+      </div>
+      <div class="sb-stat">
+        <div class="sb-stat-num" id="sb-num-enrolled">·</div>
+        enrolled
+      </div>
+      <div class="sb-stat">
+        <div class="sb-stat-num" id="sb-num-waitlist">·</div>
+        waitlist
+      </div>
+    </button>
 
     <div class="left-spacer"></div>
     <div class="left-footer">
       v0.1 · demo<br>
       UCI Course Planning
     </div>
+   </div><!-- /left-panel-scroll -->
+
+   <!-- User bar (bottom) — click to open popover ──── -->
+   <div class="user-bar" id="userBar" onclick="toggleUserPopover(event)">
+     <div class="user-bar-avatar" id="ub-avatar">··</div>
+     <div class="user-bar-name"   id="ub-name">…</div>
+     <div class="user-bar-chev">▴</div>
+
+     <div class="user-popover" id="userPopover" onclick="event.stopPropagation()">
+       <div class="user-popover-email">demo_001 · Plus</div>
+       <div class="user-popover-sep"></div>
+       <div class="user-popover-item" onclick="openProfile()">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+           <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
+           <circle cx="12" cy="7" r="4"/>
+         </svg>
+         Profile
+       </div>
+       <div class="user-popover-item" onclick="openMemory()">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+           <path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/>
+           <path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>
+         </svg>
+         Memory
+       </div>
+       <div class="user-popover-item" onclick="closeUserPopover(); openSettings()">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+           <circle cx="12" cy="12" r="3"/>
+           <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+         </svg>
+         Settings
+       </div>
+     </div>
+   </div>
   </aside>
 
   <!-- ── Center: Chat ───────────────────────────── -->
@@ -1251,6 +1596,32 @@ input { font-family: inherit; }
       <div class="modal-footer-spacer"></div>
       <button class="modal-btn modal-btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="modal-btn modal-btn-primary" onclick="savePrompt()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MEMORY MODAL ═══════════════════════════════════ -->
+<div class="modal-backdrop" id="memoryModal" onclick="closeMemory(event)">
+  <div class="modal-panel memory-modal-content" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <div class="modal-title">Memory</div>
+      <button class="modal-close" onclick="closeMemory()">&#x2715;</button>
+    </div>
+    <div class="modal-body" id="memoryBody">
+      <div class="memory-empty">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ PROFILE MODAL ══════════════════════════════════ -->
+<div class="modal-backdrop" id="profileModal" onclick="closeProfile(event)">
+  <div class="modal-panel profile-modal-content" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <div class="modal-title">Student Profile</div>
+      <button class="modal-close" onclick="closeProfile()">&#x2715;</button>
+    </div>
+    <div class="modal-body" id="profileBody">
+      <div class="memory-empty">Loading…</div>
     </div>
   </div>
 </div>
@@ -1425,6 +1796,10 @@ async function sendMessage(text) {
     currentAbortController = null;
     toggleSendStop(false);
     inputEl.focus();
+    // Channel A may have updated profile.json (e.g. user mentioned a
+    // newly-completed course). Re-fetch the sidebar so the UI stays in
+    // sync with the durable profile state.
+    loadSidebar();
   }
 }
 
@@ -1624,6 +1999,12 @@ function renderCard(card) {
     tags += `<span class="cc-tag cc-tag-prereq-warn">Missing ${card.prereq_missing.join(', ')}</span>`;
   } else {
     tags += `<span class="cc-tag">Prereqs met</span>`;
+  }
+  // Conflict badge — red when every section conflicts, yellow when some do.
+  if (card.conflict_status === 'all') {
+    tags += `<span class="cc-tag cc-tag-conflict-all">${escHTML(card.conflict_summary || 'Schedule conflict')}</span>`;
+  } else if (card.conflict_status === 'some') {
+    tags += `<span class="cc-tag cc-tag-conflict-some">${escHTML(card.conflict_summary || 'Some sections conflict')}</span>`;
   }
   if (card.ge_category) {
     tags += `<span class="cc-tag">${card.ge_category}</span>`;
@@ -1887,6 +2268,314 @@ function scrollChat() {
 }
 
 /* ── Settings modal ────────────────────────────────── */
+/* ── User popover (bottom-left avatar menu) ───────────── */
+function toggleUserPopover(ev) {
+  ev.stopPropagation();
+  const pop = document.getElementById('userPopover');
+  if (!pop) return;
+  const wasOpen = pop.classList.contains('open');
+  closeUserPopover();   // close before reopening (idempotent)
+  if (!wasOpen) {
+    pop.classList.add('open');
+    document.addEventListener('click', _userPopoverOutsideClick, { once: true });
+  }
+}
+function closeUserPopover() {
+  const pop = document.getElementById('userPopover');
+  if (pop) pop.classList.remove('open');
+}
+function _userPopoverOutsideClick() {
+  closeUserPopover();
+}
+
+/* ── Memory modal ─────────────────────────────────────── */
+function openMemory() {
+  closeUserPopover();
+  document.getElementById('memoryModal').classList.add('open');
+  loadMemory();
+}
+function closeMemory(ev) {
+  if (ev && ev.type === 'click' && ev.target.id !== 'memoryModal') return;
+  document.getElementById('memoryModal').classList.remove('open');
+}
+
+async function loadMemory() {
+  const body = document.getElementById('memoryBody');
+  body.innerHTML = '<div class="memory-empty">Loading…</div>';
+  try {
+    const r = await fetch(`${API}/api/memory/${SID === 'demo_session' ? 'demo_001' : SID}`);
+    if (!r.ok) {
+      body.innerHTML = `<div class="memory-empty">Failed to load memory (${r.status}). ` +
+        `Make sure the memory router is registered.</div>`;
+      return;
+    }
+    renderMemory(await r.json());
+  } catch (err) {
+    body.innerHTML = `<div class="memory-empty">Error: ${escHTML(String(err))}</div>`;
+  }
+}
+
+/* ── Sidebar (left panel) ───────────────────────────────
+   Fetches the same /api/memory endpoint and renders the profile +
+   completed/enrolled lists. Called on boot and after each chat reply
+   in case Channel A extracted new facts that updated the profile.
+*/
+async function loadSidebar() {
+  const uid = SID === 'demo_session' ? 'demo_001' : SID;
+  try {
+    const r = await fetch(`${API}/api/memory/${uid}`);
+    if (!r.ok) {
+      // Fallback: leave the placeholder text so the UI isn't blank.
+      return;
+    }
+    renderSidebar(await r.json(), uid);
+  } catch (err) {
+    console.warn('sidebar load failed:', err);
+  }
+}
+
+function renderSidebar(memory, userId) {
+  const profile = memory.profile || {};
+
+  // Display name. profile.display_name wins; otherwise fall back to
+  // a humanized user_id (demo_001 → "Demo 001").
+  const displayName = profile.display_name
+    || userId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+
+  // Initials: first letter of up to two name tokens.
+  const initials = displayName
+    .split(/\s+/).filter(Boolean).slice(0, 2)
+    .map(s => s[0].toUpperCase()).join('') || 'U';
+
+  // ── Top profile block ──
+  document.getElementById('sb-avatar').textContent = initials;
+  document.getElementById('sb-name').textContent   = displayName;
+  document.getElementById('sb-major').textContent  = profile.major || '';
+
+  const yearclass = document.getElementById('sb-yearclass');
+  const parts = [];
+  if (profile.year) parts.push(profile.year);
+  const gradClass = profile.graduating_class || _inferGradClass(profile.year);
+  if (gradClass) parts.push(`Class of ${gradClass}`);
+  yearclass.textContent = parts.join(' · ');
+
+  // ── Stats card (clickable summary; details live in Profile modal) ──
+  document.getElementById('sb-num-completed').textContent =
+    (profile.completed_courses || []).length;
+  document.getElementById('sb-num-enrolled').textContent =
+    (profile.selected_courses  || []).length;
+  document.getElementById('sb-num-waitlist').textContent =
+    (profile.waitlisted_courses || []).length;
+
+  // ── User bar (bottom) ──
+  document.getElementById('ub-avatar').textContent = initials;
+  document.getElementById('ub-name').textContent   = userId;
+}
+
+function _prettyCourseId(cid) {
+  // 'ICS33' → 'ICS 33', 'CS122A' → 'CS 122A', 'MATH2A' → 'MATH 2A'.
+  return cid.replace(/^([A-Z]+)(\d.*)$/, '$1 $2');
+}
+
+function _inferGradClass(year) {
+  // Heuristic: current academic year is 2025-26, ending in June 2026.
+  if (!year) return null;
+  const y = year.toLowerCase();
+  const ACADEMIC_YEAR_END = 2026;
+  const offsets = {
+    freshman: 4, sophomore: 3, junior: 2, senior: 1,
+    "1st year": 4, "2nd year": 3, "3rd year": 2, "4th year": 1,
+  };
+  return offsets[y] != null ? ACADEMIC_YEAR_END + offsets[y] - 1 : null;
+}
+
+/* ── Profile modal ────────────────────────────────────── */
+function openProfile() {
+  closeUserPopover();
+  document.getElementById('profileModal').classList.add('open');
+  loadProfile();
+}
+function closeProfile(ev) {
+  if (ev && ev.type === 'click' && ev.target.id !== 'profileModal') return;
+  document.getElementById('profileModal').classList.remove('open');
+}
+
+async function loadProfile() {
+  const body = document.getElementById('profileBody');
+  body.innerHTML = '<div class="memory-empty">Loading…</div>';
+  try {
+    const uid = SID === 'demo_session' ? 'demo_001' : SID;
+    const r = await fetch(`${API}/api/memory/${uid}`);
+    if (!r.ok) {
+      body.innerHTML = `<div class="memory-empty">Failed to load profile (${r.status}).</div>`;
+      return;
+    }
+    renderProfile(await r.json());
+  } catch (err) {
+    body.innerHTML = `<div class="memory-empty">Error: ${escHTML(String(err))}</div>`;
+  }
+}
+
+function renderProfile(data) {
+  const p = data.profile || {};
+  let html = '';
+
+  // ── About you ──
+  html += `<div class="memory-section">
+    <div class="memory-section-label">About you</div>
+    <div class="memory-about">`;
+  if (p.major)
+    html += `<div class="memory-about-line"><strong>${escHTML(p.major)}</strong>` +
+            (p.year ? ` · ${escHTML(p.year)}` : '') + `</div>`;
+  if (p.target_gpa)
+    html += `<div class="memory-about-line">Target GPA: <strong>${p.target_gpa}</strong></div>`;
+  const grad = p.graduating_class || _inferGradClass(p.year);
+  if (grad)
+    html += `<div class="memory-about-line">Expected graduation: <strong>${grad}</strong></div>`;
+  html += `</div></div>`;
+
+  // ── Course lists (Completed / Enrolled / Waitlisted) ──
+  const sections = [
+    ['Completed',  p.completed_courses  || [], 'dot-complete'],
+    ['Enrolled',   p.selected_courses   || [], 'dot-enrolled'],
+    ['Waitlisted', p.waitlisted_courses || [], 'dot-waitlist'],
+  ];
+  for (const [label, courses, dotClass] of sections) {
+    html += `<div class="memory-section">
+      <div class="memory-section-label">${label}<span class="profile-section-count">${courses.length}</span></div>`;
+    if (!courses.length) {
+      html += `<div class="memory-empty">No ${label.toLowerCase()} courses.</div>`;
+    } else {
+      html += `<div class="profile-course-grid">`;
+      for (const cid of courses) {
+        html += `<div class="left-course-tag"><span class="${dotClass}"></span> ${escHTML(_prettyCourseId(cid))}</div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  document.getElementById('profileBody').innerHTML = html;
+}
+
+function renderMemory(data) {
+  const profile = data.profile || {};
+  const prefs = data.preferences || [];
+  const prog = data.major_progress;
+
+  let html = '';
+
+  // ── About you ────────────────────────────────────
+  html += `<div class="memory-section">
+    <div class="memory-section-label">About you</div>
+    <div class="memory-about">`;
+  if (profile.major)
+    html += `<div class="memory-about-line"><strong>${escHTML(profile.major)}</strong>` +
+            (profile.year ? ` · ${escHTML(profile.year)}` : '') + `</div>`;
+  const nComplete = (profile.completed_courses || []).length;
+  const nEnrolled = (profile.selected_courses || []).length;
+  html += `<div class="memory-about-line">` +
+          `<strong>${nComplete}</strong> completed · ` +
+          `<strong>${nEnrolled}</strong> enrolled</div>`;
+  if (profile.completed_courses && profile.completed_courses.length)
+    html += `<div class="memory-about-line" style="font-size:11px;color:var(--text-tertiary);">` +
+            profile.completed_courses.join(', ') + `</div>`;
+  html += `</div></div>`;
+
+  // ── Major progress ───────────────────────────────
+  if (prog && prog.overall_total) {
+    const pct = Math.round((prog.overall_pct || 0) * 100);
+    html += `<div class="memory-section">
+      <div class="memory-section-label">Major progress</div>
+      <div class="memory-progress-title">${escHTML(prog.name || '')} <span style="color:var(--text-tertiary);font-weight:400;">${escHTML(prog.degree || '')}</span></div>
+      <div class="memory-progress-bar"><div class="memory-progress-fill" style="width:${pct}%;"></div></div>
+      <div class="memory-progress-rows">`;
+    const rows = [
+      ['Lower-div required',  prog.lower_required],
+      ['Lower-div choices',   prog.lower_choice],
+      ['Upper-div required',  prog.upper_required],
+      ['Upper-div electives', prog.upper_electives],
+    ];
+    for (const [label, val] of rows) {
+      if (!val) continue;
+      const done = val.done === val.total ? 'done' : 'count';
+      html += `<span class="label">${label}</span>` +
+              `<span class="${done}">${val.done}/${val.total}</span>`;
+    }
+    html += `</div>
+      <div class="memory-about-line" style="font-size:11px;color:var(--text-tertiary);margin-top:8px;">` +
+      `${prog.overall_done} of ${prog.overall_total} milestone courses (${pct}%)</div>` +
+      `</div>`;
+  }
+
+  // ── Learned preferences ──────────────────────────
+  html += `<div class="memory-section">
+    <div class="memory-section-label">Learned preferences</div>`;
+  if (!prefs.length) {
+    html += `<div class="memory-empty">ZotAdvisor hasn't learned any preferences yet. ` +
+            `Chat naturally and it'll pick up on what matters to you.</div>`;
+  } else {
+    for (const p of prefs) {
+      const when = p.learned_at ? formatLearnedAt(p.learned_at) : '';
+      html += `<div class="memory-pref-row">
+        <div class="memory-pref-text">${escHTML(p.text || '')}` +
+        (when ? `<span class="memory-pref-when">${when}</span>` : '') +
+        `</div>
+        <button class="memory-pref-forget" title="Forget this"
+                onclick="forgetPreference('${escHTML(p.id)}')">&#x2715;</button>
+      </div>`;
+    }
+    html += `<button class="memory-forget-all" onclick="forgetAllPreferences()">Forget all preferences</button>`;
+  }
+  html += `</div>`;
+
+  document.getElementById('memoryBody').innerHTML = html;
+}
+
+function formatLearnedAt(iso) {
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    const diffMs = now - d;
+    const day = 86_400_000;
+    if (diffMs < day)         return 'learned today';
+    if (diffMs < 2 * day)     return 'learned yesterday';
+    if (diffMs < 14 * day)    return `learned ${Math.floor(diffMs / day)} days ago`;
+    return `learned ${d.toLocaleDateString()}`;
+  } catch { return ''; }
+}
+
+async function forgetPreference(prefId) {
+  const uid = SID === 'demo_session' ? 'demo_001' : SID;
+  try {
+    const r = await fetch(`${API}/api/memory/${uid}/preferences/${prefId}`,
+                         { method: 'DELETE' });
+    if (!r.ok) {
+      alert(`Failed to forget: ${r.status}`);
+      return;
+    }
+    loadMemory();   // refresh
+  } catch (err) {
+    alert(`Network error: ${err}`);
+  }
+}
+
+async function forgetAllPreferences() {
+  if (!confirm('Forget all learned preferences? This cannot be undone.')) return;
+  const uid = SID === 'demo_session' ? 'demo_001' : SID;
+  try {
+    const r = await fetch(`${API}/api/memory/${uid}/preferences/forget_all`,
+                         { method: 'POST' });
+    if (!r.ok) {
+      alert(`Failed: ${r.status}`);
+      return;
+    }
+    loadMemory();
+  } catch (err) {
+    alert(`Network error: ${err}`);
+  }
+}
+
 function openSettings() {
   const modal = document.getElementById('settingsModal');
   const ta = document.getElementById('promptTextarea');
@@ -1956,6 +2645,7 @@ document.addEventListener('keydown', e => {
   await Promise.all([
     loadTerms(),
     loadDefaultPromptFromAPI(),
+    loadSidebar(),
   ]);
 })();
 </script>

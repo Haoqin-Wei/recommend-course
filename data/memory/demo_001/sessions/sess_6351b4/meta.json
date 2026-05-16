@@ -1,0 +1,18 @@
+{
+  "session_id": "sess_6351b4",
+  "user_id": "demo_001",
+  "title": "New conversation",
+  "term_scope": "Spring 2026",
+  "created_at": "2026-05-15T23:20:09+00:00",
+  "last_active_at": "2026-05-15T23:21:14+00:00",
+  "turn_count": 4,
+  "decisions": [
+    {
+      "text": "选 CS122A",
+      "from_turn": 2,
+      "at": "2026-05-15T23:20:22+00:00"
+    }
+  ],
+  "summary": null,
+  "summary_through_turn": null
+}

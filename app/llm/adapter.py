@@ -114,9 +114,19 @@ Style rules:
 - If no results match, suggest loosening which specific constraints
 - Pay attention to constraints the student mentions ("X is full", "I can't take Y", \
 "avoid morning") — never recommend a course the student has explicitly excluded
+- If a candidate has `conflict_status: "all"`, you MUST warn the student that \
+it conflicts with their current schedule and reference the conflicting course \
+shown in `conflict_summary`. Suggest dropping the conflict, or pivoting to a \
+non-conflicting alternative.
+- If a candidate has `conflict_status: "some"`, note that not every section \
+fits the schedule and suggest which sections to look at (the ones with empty \
+`conflicts_with` arrays).
 - For single-point queries (one course or one professor), answer concisely
 - Use **bold** for course IDs and key headers
 - Keep your response focused — aim for clarity over length
+- Do NOT output a "Data check", "Validation", "数据校验", or similar \
+section yourself. The system appends a separate validation footer below \
+your answer; emitting one yourself creates a confusing duplicate.
 """
 
 REFLECTION_SYSTEM_PROMPT = """\
@@ -239,13 +249,31 @@ async def generate_answer_llm(
     session_state: dict,
     memory_context: Optional[dict] = None,
     system_prompt_override: Optional[str] = None,
+    # ── Phase 3.4: structured context layers (all optional for back-compat) ──
+    recent_turns: Optional[list[dict]] = None,
+    decisions: Optional[list[dict]] = None,
+    summary: Optional[str] = None,
+    profile: Optional[dict] = None,
+    preferences: Optional[list] = None,
+    facts: Optional[list] = None,
 ) -> Optional[str]:
     if not LLM_ENABLED:
         return None
     try:
-        system = _build_system_prompt(memory_context, system_prompt_override)
-        context = _build_answer_context(user_message, retrieved_data, session_state, memory_context)
-        raw = await _call_llm(system, context)
+        messages = _build_messages_for_llm(
+            user_message=user_message,
+            retrieved_data=retrieved_data,
+            session_state=session_state,
+            memory_context=memory_context,
+            system_prompt_override=system_prompt_override,
+            recent_turns=recent_turns,
+            decisions=decisions,
+            summary=summary,
+            profile=profile,
+            preferences=preferences,
+            facts=facts,
+        )
+        raw = await _call_llm_with_messages(messages)
         cleaned = raw.strip() if raw else ""
         if not cleaned:
             logger.warning("generate_answer_llm got empty content; falling back.")
@@ -262,6 +290,13 @@ async def stream_answer_llm(
     session_state: dict,
     memory_context: Optional[dict] = None,
     system_prompt_override: Optional[str] = None,
+    # ── Phase 3.4: structured context layers (all optional for back-compat) ──
+    recent_turns: Optional[list[dict]] = None,
+    decisions: Optional[list[dict]] = None,
+    summary: Optional[str] = None,
+    profile: Optional[dict] = None,
+    preferences: Optional[list] = None,
+    facts: Optional[list] = None,
 ) -> AsyncIterator[str]:
     """
     Streaming variant of generate_answer_llm.
@@ -280,17 +315,25 @@ async def stream_answer_llm(
     if not LLM_ENABLED:
         return
 
-    system = _build_system_prompt(memory_context, system_prompt_override)
-    context = _build_answer_context(user_message, retrieved_data, session_state, memory_context)
+    messages = _build_messages_for_llm(
+        user_message=user_message,
+        retrieved_data=retrieved_data,
+        session_state=session_state,
+        memory_context=memory_context,
+        system_prompt_override=system_prompt_override,
+        recent_turns=recent_turns,
+        decisions=decisions,
+        summary=summary,
+        profile=profile,
+        preferences=preferences,
+        facts=facts,
+    )
 
     client = _get_client()
     try:
         response = await client.chat.completions.create(
             model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": context},
-            ],
+            messages=messages,
             stream=True,
         )
         async for chunk in response:
@@ -401,6 +444,12 @@ def _build_answer_context(
     session_state: dict,
     memory_context: Optional[dict] = None,
 ) -> str:
+    """
+    LEGACY: monolithic single-string context. Kept for backwards compat
+    with any caller that still uses generate_answer_llm or
+    stream_answer_llm without the new structured params. The new code
+    path goes through _build_messages_for_llm below.
+    """
     parts = []
     parts.append(f"STUDENT MESSAGE: {user_message}")
     parts.append("")
@@ -431,3 +480,108 @@ def _build_answer_context(
     parts.append(json.dumps(retrieved_data, indent=2, default=str))
 
     return "\n".join(parts)
+
+
+# ══════════════════════════════════════════════════════════
+#  Phase 3.4: structured 6-layer context (new code path)
+# ══════════════════════════════════════════════════════════
+
+def _build_messages_for_llm(
+    user_message: str,
+    retrieved_data: dict,
+    session_state: dict,
+    memory_context: Optional[dict] = None,
+    system_prompt_override: Optional[str] = None,
+    recent_turns: Optional[list[dict]] = None,
+    decisions: Optional[list[dict]] = None,
+    summary: Optional[str] = None,
+    profile: Optional[dict] = None,
+    preferences: Optional[list] = None,
+    facts: Optional[list] = None,
+) -> list[dict]:
+    """
+    Build the OpenAI-style messages list using the 6-layer context.
+
+    If `recent_turns` is provided, this uses the new layered builder
+    (context_builder.build_messages). If absent, falls back to the
+    legacy single-string context so that older callers keep working
+    until chat.py is fully updated.
+    """
+    # Static system prompt (with optional override)
+    base_system = (
+        system_prompt_override.strip()
+        if (system_prompt_override and system_prompt_override.strip())
+        else ANSWER_SYSTEM_PROMPT
+    )
+
+    # If no structured context was passed, use the legacy single-string format
+    # so that this function is a drop-in replacement for the old flow.
+    if recent_turns is None and decisions is None and summary is None \
+            and profile is None and preferences is None and facts is None:
+        system = _build_system_prompt(memory_context, system_prompt_override)
+        context = _build_answer_context(
+            user_message, retrieved_data, session_state, memory_context,
+        )
+        return [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": context},
+        ]
+
+    # New path: structured 6-layer assembly
+    from app.llm import context_builder
+
+    # If profile/preferences weren't passed but memory_context has the
+    # rendered block, fold it into the system message as before so we
+    # don't lose information.
+    fallback_memory_block = None
+    if memory_context and not (profile or preferences or facts):
+        fallback_memory_block = memory_context.get("system_prompt_block")
+
+    # We use session_state to derive a minimal profile if none provided —
+    # keeps the call site simple while still showing the LLM the basics.
+    derived_profile = profile or {
+        "major":             session_state.get("major"),
+        "year":              session_state.get("year"),
+        "completed_courses": session_state.get("completed_courses") or [],
+        "selected_courses":  session_state.get("selected_courses") or [],
+    }
+
+    base_with_legacy = base_system
+    if fallback_memory_block:
+        base_with_legacy = (
+            base_system
+            + "\n\n--- Persistent context about this student ---\n"
+            + fallback_memory_block
+        )
+
+    return context_builder.build_messages(
+        system_prompt=base_with_legacy,
+        user_message=user_message,
+        profile=derived_profile,
+        preferences=preferences,
+        facts=facts,
+        decisions=decisions,
+        summary=summary,
+        recent_turns=recent_turns,
+        retrieved_data=retrieved_data,
+        last_n_turns=10,
+    )
+
+
+async def _call_llm_with_messages(messages: list[dict]) -> Optional[str]:
+    """
+    Non-streaming LLM call given a pre-built messages list.
+    Used by generate_answer_llm.
+    """
+    client = _get_client()
+    try:
+        response = await client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+        )
+        if not response.choices:
+            return None
+        return response.choices[0].message.content
+    except Exception as e:
+        logger.error("_call_llm_with_messages failed: %s", e)
+        return None

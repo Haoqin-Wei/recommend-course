@@ -1,0 +1,29 @@
+{
+  "title": "2025-26 Edition",
+  "school": "",
+  "requirements_text": "A. Required Major Courses:\nBIO SCI M114 | Advanced Biochemistry\nBIO SCI M116 | Advanced Molecular Biology\nB. Upper-Division Laboratories:\nBIO SCI M114L | Biochemistry Laboratory\nBIO SCI M116L | Molecular Biology Laboratory\nSelect one of the following:\nBIO SCI M118L | Experimental Microbiology Laboratory\nBIO SCI M121L | Advanced Immunology Laboratory\nBIO SCI M128L | Introductory Bioinformatics Lab\nBIO SCI 199 Study in Biological Science Research (Approved by the Biochemistry and Molecular Biology Faculty Board.)\nC. Upper-Division Biology Electives:\nSelect three of the following:\nBIO SCI M119 –M189\nBIO SCI D137 | Eukaryotic and Human Genetics\nBIO SCI D145 | Genomics, Development, and Medicine\nBIO SCI M119 –M190\nCHEM 128 | Introduction to Chemical Biology\nCHEM 132A | Chemical Thermodynamics, Kinetics, and Dynamics\nCHEM 132B | Quantum Principles, Spectroscopy, and Bonding\nCHEM 132C | Molecular Structure and Elementary Statistical Mechanics\nPHRMSCI 170A | Molecular Pharmacology I\nPHRMSCI 171 | Physical Biochemistry\nSelect two four-unit courses from the following:\nBIO SCI D103 –D189, E106–E189, M119–M190, N110–N189\nNo course may be used to satisfy more than one requirement.\nMajor Requirements",
+  "course_refs": [
+    "BIO SCI M114",
+    "BIO SCI M116",
+    "BIO SCI M114L",
+    "BIO SCI M116L",
+    "BIO SCI M118L",
+    "BIO SCI M121L",
+    "BIO SCI M128L",
+    "BIO SCI 199",
+    "BIO SCI M119",
+    "BIO SCI D137",
+    "BIO SCI D145",
+    "CHEM 128",
+    "CHEM 132A",
+    "CHEM 132B",
+    "CHEM 132C",
+    "PHRMSCI 170A",
+    "PHRMSCI 171",
+    "BIO SCI D103"
+  ],
+  "label": "Biochemistry and Molecular Biology, B.S.",
+  "degree_type": "B.S.",
+  "url": "https://catalogue.uci.edu/charliedunlopschoolofbiologicalsciences/departmentofmolecularbiologyandbiochemistry/biochemistryandmolecularbiology_bs/",
+  "slug": "biochemistryandmolecularbiology_bs"
+}

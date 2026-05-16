@@ -1,0 +1,24 @@
+{
+  "course_id": "CS122A",
+  "avg_gpa": 3.14,
+  "samples": 9070,
+  "graded": 8922,
+  "letter_counts": {
+    "A": 3587,
+    "B": 3552,
+    "C": 1487,
+    "D": 171,
+    "F": 125,
+    "P": 92,
+    "NP": 14,
+    "W": 42
+  },
+  "letter_pct": {
+    "A": 40.2,
+    "B": 39.8,
+    "C": 16.7,
+    "D": 1.9,
+    "F": 1.4
+  },
+  "source": "Anteater /grades/aggregate (all historical)"
+}

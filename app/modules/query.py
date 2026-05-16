@@ -21,6 +21,7 @@ Applies SKILL.md filtering rules:
 
 from typing import Optional
 from app.data import db
+from app.modules import conflict
 
 
 def query_course_recommendations(
@@ -47,6 +48,13 @@ def query_course_recommendations(
     else:
         candidates = db.search_courses(exclude_ids=exclude_ids)
 
+    # ── Build the student's current schedule for conflict checks ──
+    # Each selected course → its actual sections in this term. Conflict
+    # detection compares candidate sections against these.
+    student_schedule_sections: list[dict] = []
+    for sel_cid in selected:
+        student_schedule_sections.extend(db.get_sections(sel_cid, term))
+
     # ── Enrich each candidate ─────────────────────────────
     enriched = []
     for course in candidates:
@@ -72,9 +80,27 @@ def query_course_recommendations(
             prof_rating = db.get_professor_rating(sec["instructor"])
             section_details.append({**sec, "professor_rating": prof_rating})
 
-        # Time conflict check
-        # TODO: Implement real time overlap detection
-        has_conflict = False
+        # Surface the main lecture before discussion/lab sections so the
+        # card preview displays the canonical meeting, not a Friday-only Dis.
+        _TYPE_ORDER = {"Lec": 0, "Sem": 1, "Stu": 2, "Lab": 3, "Dis": 4, "Tut": 5}
+        section_details.sort(
+            key=lambda s: (_TYPE_ORDER.get(s.get("sectionType", ""), 99),
+                           s.get("sectionCode", "")),
+        )
+
+        # Time-conflict check (Phase 2.8) — per-section, then rolled up.
+        section_conflicts = conflict.find_conflicts(
+            section_details, student_schedule_sections,
+        )
+        # Attach per-section conflict info so the LLM and frontend can
+        # show "this Lec conflicts but Tu Lab is free" detail if needed.
+        for sec in section_details:
+            sec["conflicts_with"] = section_conflicts.get(sec.get("section_id", ""), [])
+
+        conflict_info = conflict.summarize_for_card(section_details, section_conflicts)
+        # `has_conflict` is True only when *every* section conflicts — partial
+        # conflicts still leave the student a route via the unblocked section.
+        has_conflict = conflict_info["status"] == "all"
 
         enriched.append({
             "course": course,
@@ -83,6 +109,8 @@ def query_course_recommendations(
             "sections": section_details,
             "grade_distribution": grades,
             "has_conflict": has_conflict,
+            "conflict_summary": conflict_info["summary"],
+            "conflict_status":  conflict_info["status"],
         })
 
     # ── Sort by preference ────────────────────────────────

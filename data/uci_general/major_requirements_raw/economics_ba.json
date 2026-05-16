@@ -1,0 +1,22 @@
+{
+  "title": "2025-26 Edition",
+  "school": "",
+  "requirements_text": "A. Lower-division:\nECON 20A - 20B | Basic Economics I and Basic Economics II\nECON 15A - 15B | Probability and Statistics in Economics I and Probability and Statistics in Economics II\nMATH 2A - 2B | Single-Variable Calculus I and Single-Variable Calculus II\nB. Upper-division:\nECON 100A - 100B - 100C | Intermediate Economics I and Intermediate Economic II and Intermediate Economics III\nECON 122A | Applied Econometrics I\nC. Six additional ECON courses, one of which may be lower-division.\nD. A maximum of three four-unit courses selected from ECON 190 –199 may be counted toward the major.\nDepartmental Requirements for the Major in Economics\nThis major is designed for students seeking a broad education applicable to occupations in business, law, and government or as preparation for graduate school in the social sciences. University and School requirements must be met and must include 16 courses as specified below.",
+  "course_refs": [
+    "ECON 20A",
+    "ECON 20B",
+    "ECON 15A",
+    "ECON 15B",
+    "MATH 2A",
+    "MATH 2B",
+    "ECON 100A",
+    "ECON 100B",
+    "ECON 100C",
+    "ECON 122A",
+    "ECON 190"
+  ],
+  "label": "Economics, B.A.",
+  "degree_type": "B.A.",
+  "url": "https://catalogue.uci.edu/schoolofsocialsciences/departmentofeconomics/economics_ba/",
+  "slug": "economics_ba"
+}

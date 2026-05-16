@@ -37,6 +37,25 @@ FACTS_MAX_CHARS = 2200
 PREFETCH_MAX_ITEMS = 5
 
 
+def _pref_text(item) -> str:
+    """
+    Extract searchable text from a memory item.
+
+    facts.json is list[str] (legacy format kept).
+    preferences.json is list[dict] post-Phase-2 schema migration —
+    each entry has {id, text, learned_at}.
+
+    Returns empty string for anything we can't normalize, so callers can
+    safely .lower() / regex without isinstance checks.
+    """
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        v = item.get("text")
+        return v if isinstance(v, str) else ""
+    return ""
+
+
 class JSONFileMemoryProvider(MemoryProvider):
     """File-based memory store. Simple, durable, no extra dependencies."""
 
@@ -87,7 +106,11 @@ class JSONFileMemoryProvider(MemoryProvider):
         if preferences:
             lines.append("\nLEARNED PREFERENCES (from past sessions):")
             for p in preferences[-10:]:
-                lines.append(f"  - {p}")
+                # Post-Phase-2 migration: preferences are dicts {id, text,
+                # learned_at}. Legacy data may still be bare strings.
+                text = _pref_text(p)
+                if text:
+                    lines.append(f"  - {text}")
         return "\n".join(lines)
 
     def prefetch(self, query: str, user_id: str) -> str:
@@ -100,14 +123,17 @@ class JSONFileMemoryProvider(MemoryProvider):
         keywords = [w.lower() for w in query.split() if len(w) > 3]
         if not keywords:
             return ""
-        matched = [
-            item for item in items
-            if any(kw in item.lower() for kw in keywords)
-        ]
-        if not matched:
+        # facts is list[str]; preferences is list[dict] post-migration —
+        # normalize through _pref_text before string matching.
+        matched_texts: list[str] = []
+        for item in items:
+            text = _pref_text(item)
+            if text and any(kw in text.lower() for kw in keywords):
+                matched_texts.append(text)
+        if not matched_texts:
             return ""
         head = "RELEVANT PRIOR CONTEXT (recalled for this query):"
-        bullets = "\n".join(f"  - {m}" for m in matched[:PREFETCH_MAX_ITEMS])
+        bullets = "\n".join(f"  - {t}" for t in matched_texts[:PREFETCH_MAX_ITEMS])
         return f"{head}\n{bullets}"
 
     # ── Per-turn ────────────────────────────────────────────
@@ -185,8 +211,9 @@ class JSONFileMemoryProvider(MemoryProvider):
         text = text.strip()
         if not text:
             return
-        # Dedup case-insensitively against existing
-        existing_lower = {p.lower() for p in self._loaded[user_id]["preferences"]}
+        # Dedup case-insensitively against existing — handle both legacy
+        # string entries and post-migration {id, text, learned_at} dicts.
+        existing_lower = {_pref_text(p).lower() for p in self._loaded[user_id]["preferences"]}
         if text.lower() in existing_lower:
             return
         self._loaded[user_id]["preferences"].append(text)

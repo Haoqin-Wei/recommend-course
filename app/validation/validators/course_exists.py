@@ -69,7 +69,7 @@ class CourseExistsValidator(Validator):
                 severity=Severity.ERROR,
                 message=(
                     f"LLM mentioned {ref.display()}, but no such course "
-                    f"exists in our data for {ctx.catalog.target_term.display()}."
+                    f"exists in the UCI catalog."
                 ),
                 location={
                     "start": start, "end": end,

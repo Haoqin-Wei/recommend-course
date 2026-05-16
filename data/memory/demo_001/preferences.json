@@ -1,4 +1,7 @@
 [
-  "Prefers easy courses",
-  "Dislikes morning classes"
+  {
+    "id": "pref_cc1cd1",
+    "text": "Dislikes morning classes",
+    "learned_at": "2026-05-13T21:26:55+00:00"
+  }
 ]

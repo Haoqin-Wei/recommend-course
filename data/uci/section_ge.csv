@@ -1021,10 +1021,19 @@ section_id,ge_code
 2025_Spring_40896,GE Va: Quantitative Literacy
 2025_Spring_40897,GE II: Science and Technology
 2025_Spring_40897,GE Va: Quantitative Literacy
+2025_Spring_40430,GE II: Science and Technology
+2025_Spring_40430,GE Va: Quantitative Literacy
+2025_Spring_40432,GE II: Science and Technology
+2025_Spring_40432,GE Va: Quantitative Literacy
+2025_Spring_40431,GE II: Science and Technology
+2025_Spring_40431,GE Va: Quantitative Literacy
+2025_Spring_40433,GE II: Science and Technology
+2025_Spring_40433,GE Va: Quantitative Literacy
 2025_Spring_40997,GE Ib: Upper Division Writing
 2025_Spring_40921,GE Ib: Upper Division Writing
 2025_Spring_40922,GE Ib: Upper Division Writing
 2025_Spring_22026,GE VI: Language Other Than English
+2025_Spring_22070,GE VIII: International/Global Issues
 2025_Spring_22251,GE IV: Arts and Humanities
 2025_Spring_22306,GE IV: Arts and Humanities
 2025_Spring_22301,GE IV: Arts and Humanities
@@ -2559,6 +2568,7 @@ section_id,ge_code
 2026_Spring_40205,GE Va: Quantitative Literacy
 2026_Spring_22022,GE VI: Language Other Than English
 2026_Spring_22026,GE VI: Language Other Than English
+2026_Spring_22075,GE VIII: International/Global Issues
 2026_Spring_22060,GE VIII: International/Global Issues
 2026_Spring_22032,GE VI: Language Other Than English
 2026_Spring_22230,GE IV: Arts and Humanities
@@ -2568,11 +2578,32 @@ section_id,ge_code
 2026_Spring_22302,GE IV: Arts and Humanities
 2026_Spring_22301,GE IV: Arts and Humanities
 2026_Spring_22303,GE IV: Arts and Humanities
+2026_Spring_61512,GE III: Social & Behavioral Sciences
+2026_Spring_61514,GE III: Social & Behavioral Sciences
+2026_Spring_61511,GE III: Social & Behavioral Sciences
+2026_Spring_61510,GE III: Social & Behavioral Sciences
+2026_Spring_61513,GE III: Social & Behavioral Sciences
+2026_Spring_61521,GE III: Social & Behavioral Sciences
+2026_Spring_61523,GE III: Social & Behavioral Sciences
+2026_Spring_61520,GE III: Social & Behavioral Sciences
+2026_Spring_61524,GE III: Social & Behavioral Sciences
+2026_Spring_61522,GE III: Social & Behavioral Sciences
+2026_Spring_61500,GE III: Social & Behavioral Sciences
 2026_Spring_61571,GE Vb: Formal Reasoning
 2026_Spring_61572,GE Vb: Formal Reasoning
 2026_Spring_61573,GE Vb: Formal Reasoning
 2026_Spring_61570,GE Vb: Formal Reasoning
 2026_Spring_61574,GE Vb: Formal Reasoning
+2026_Spring_61562,GE Va: Quantitative Literacy
+2026_Spring_61563,GE Va: Quantitative Literacy
+2026_Spring_61560,GE Va: Quantitative Literacy
+2026_Spring_61564,GE Va: Quantitative Literacy
+2026_Spring_61561,GE Va: Quantitative Literacy
+2026_Spring_61551,GE Va: Quantitative Literacy
+2026_Spring_61553,GE Va: Quantitative Literacy
+2026_Spring_61550,GE Va: Quantitative Literacy
+2026_Spring_61554,GE Va: Quantitative Literacy
+2026_Spring_61552,GE Va: Quantitative Literacy
 2026_Spring_22720,GE IV: Arts and Humanities
 2026_Spring_22720,GE VIII: International/Global Issues
 2026_Spring_22712,GE IV: Arts and Humanities
@@ -2804,6 +2835,12 @@ section_id,ge_code
 2026_Spring_26632,GE IV: Arts and Humanities
 2026_Spring_26632,GE VIII: International/Global Issues
 2026_Spring_26660,GE Ib: Upper Division Writing
+2026_Spring_26622,GE IV: Arts and Humanities
+2026_Spring_26622,GE VIII: International/Global Issues
+2026_Spring_26621,GE IV: Arts and Humanities
+2026_Spring_26621,GE VIII: International/Global Issues
+2026_Spring_26620,GE IV: Arts and Humanities
+2026_Spring_26620,GE VIII: International/Global Issues
 2026_Spring_26550,GE IV: Arts and Humanities
 2026_Spring_26550,GE VIII: International/Global Issues
 2026_Spring_26555,GE IV: Arts and Humanities
@@ -2826,7 +2863,42 @@ section_id,ge_code
 2026_Spring_26642,GE VIII: International/Global Issues
 2026_Spring_26580,GE IV: Arts and Humanities
 2026_Spring_26581,GE IV: Arts and Humanities
+2026_Spring_26600,GE IV: Arts and Humanities
 2026_Spring_26650,GE Ib: Upper Division Writing
+2026_Spring_26646,GE IV: Arts and Humanities
+2026_Spring_26646,GE VIII: International/Global Issues
+2026_Spring_26647,GE IV: Arts and Humanities
+2026_Spring_26647,GE VIII: International/Global Issues
+2026_Spring_26645,GE IV: Arts and Humanities
+2026_Spring_26645,GE VIII: International/Global Issues
+2026_Spring_26563,GE IV: Arts and Humanities
+2026_Spring_26563,GE VIII: International/Global Issues
+2026_Spring_26565,GE IV: Arts and Humanities
+2026_Spring_26565,GE VIII: International/Global Issues
+2026_Spring_26590,GE IV: Arts and Humanities
+2026_Spring_26590,GE VIII: International/Global Issues
+2026_Spring_26564,GE IV: Arts and Humanities
+2026_Spring_26564,GE VIII: International/Global Issues
+2026_Spring_26589,GE IV: Arts and Humanities
+2026_Spring_26589,GE VIII: International/Global Issues
+2026_Spring_26562,GE IV: Arts and Humanities
+2026_Spring_26562,GE VIII: International/Global Issues
+2026_Spring_26591,GE IV: Arts and Humanities
+2026_Spring_26591,GE VIII: International/Global Issues
+2026_Spring_26586,GE IV: Arts and Humanities
+2026_Spring_26586,GE VIII: International/Global Issues
+2026_Spring_26587,GE IV: Arts and Humanities
+2026_Spring_26587,GE VIII: International/Global Issues
+2026_Spring_26566,GE IV: Arts and Humanities
+2026_Spring_26566,GE VIII: International/Global Issues
+2026_Spring_26585,GE IV: Arts and Humanities
+2026_Spring_26585,GE VIII: International/Global Issues
+2026_Spring_26588,GE IV: Arts and Humanities
+2026_Spring_26588,GE VIII: International/Global Issues
+2026_Spring_26561,GE IV: Arts and Humanities
+2026_Spring_26561,GE VIII: International/Global Issues
+2026_Spring_26560,GE IV: Arts and Humanities
+2026_Spring_26560,GE VIII: International/Global Issues
 2026_Spring_28180,GE IV: Arts and Humanities
 2026_Spring_28180,GE VIII: International/Global Issues
 2026_Spring_28425,GE Ib: Upper Division Writing
@@ -2991,6 +3063,10 @@ section_id,ge_code
 2026_Spring_35631,GE Vb: Formal Reasoning
 2026_Spring_35630,GE Vb: Formal Reasoning
 2026_Spring_35780,GE Vb: Formal Reasoning
+2026_Spring_35660,GE II: Science and Technology
+2026_Spring_35660,GE Vb: Formal Reasoning
+2026_Spring_35661,GE II: Science and Technology
+2026_Spring_35661,GE Vb: Formal Reasoning
 2026_Spring_35670,GE II: Science and Technology
 2026_Spring_35600,GE III: Social & Behavioral Sciences
 2026_Spring_64020,GE III: Social & Behavioral Sciences

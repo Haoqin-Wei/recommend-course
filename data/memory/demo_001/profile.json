@@ -1,5 +1,17 @@
 {
   "major": "Computer Science",
-  "year": "junior",
-  "target_gpa": 3.7
+  "year": "Sophomore",
+  "target_gpa": 3.7,
+  "completed_courses": [
+    "ICS31",
+    "ICS32",
+    "MATH2A",
+    "MATH2B",
+    "WRITING39A",
+    "WRITING39B"
+  ],
+  "selected_courses": [
+    "ICS33",
+    "STATS67"
+  ]
 }

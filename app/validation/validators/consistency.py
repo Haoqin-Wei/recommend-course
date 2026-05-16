@@ -65,11 +65,18 @@ class ConsistencyValidator(Validator):
                 ))
 
         # ── R2. Flagged course used as recommendation ──
+        # Dedupe: same course mentioned with rec language across 5 sentences
+        # shouldn't yield 5 identical issues.
+        seen_flagged: set[str] = set()
         for ref, start, end in iter_course_mentions(ctx.llm_answer):
             if ref not in flagged:
                 continue
+            key = ref.display()
+            if key in seen_flagged:
+                continue
             window = ctx.llm_answer[max(0, start - 80): end + 80]
             if _RECOMMEND_KEYWORDS.search(window):
+                seen_flagged.add(key)
                 issues.append(Issue(
                     validator=self.name,
                     code="FLAGGED_AS_RECOMMENDATION",
