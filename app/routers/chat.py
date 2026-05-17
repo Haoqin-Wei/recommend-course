@@ -26,6 +26,7 @@ Logging:
     can watch the memory pipeline live in the uvicorn terminal.
 """
 
+import asyncio
 import logging
 import re
 
@@ -212,6 +213,10 @@ def _persist_turn(
     persistent_sid: str,
     user_msg: str,
     assistant_reply: str,
+    *,
+    cards: Optional[list] = None,
+    followups: Optional[list] = None,
+    validation: Optional[dict] = None,
 ) -> tuple[int, bool]:
     """
     Append user + assistant turns to sessions/{sid}/turns.jsonl.
@@ -236,7 +241,10 @@ def _persist_turn(
     did_auto_title = False
     try:
         sessions_data.append_turn(user_id, persistent_sid, "user", user_msg)
-        idx = sessions_data.append_turn(user_id, persistent_sid, "assistant", assistant_reply)
+        idx = sessions_data.append_turn(
+            user_id, persistent_sid, "assistant", assistant_reply,
+            cards=cards, followups=followups, validation=validation,
+        )
 
         # First-turn snippet title (cheap heuristic; Round 4 LLM auto-title
         # runs as a BackgroundTask and overwrites this shortly after).
@@ -918,6 +926,108 @@ async def _handle_single_query(message, state, memory_context=None, system_promp
 #   data: {"type": "meta",  "cards": [...], "followups": [...], ...}
 #   data: {"type": "done"}
 
+
+# ── Agent-loop handler (replaces single_query / recommendation) ──
+
+async def _handle_agent(
+    user_message: str,
+    state: dict,
+    memory_context: Optional[dict],
+    *,
+    user_id: str,
+    system_prompt: Optional[str],
+    queue: asyncio.Queue,
+    recent_turns: Optional[list[dict]] = None,
+    decisions: Optional[list[dict]] = None,
+    summary: Optional[str] = None,
+) -> Optional[tuple[str, list, list, Optional[dict]]]:
+    """
+    Drive a tool-using LLM turn via app.agent.loop and forward its
+    events to the SSE queue.
+
+    Pre-flight fallback: if the agent's FIRST event is an error (LLM
+    call failed before any output reached the client), return None so
+    the caller can fall back to the legacy single_query / recommendation
+    handler. Mid-flight errors surface as visible error events — by
+    that point the user has already seen partial output, falling back
+    would produce duplicate text.
+
+    Returns (reply_text, cards, followups, validation) on success.
+    v1: cards/followups/validation are always [], [], None — the agent
+    produces free-form text. Structured cards can be layered on later
+    by post-processing the reply or by adding a "propose_card" tool.
+    """
+    from app.llm import adapter
+
+    accumulated = ""
+    saw_any_event = False
+
+    try:
+        async for event in adapter.stream_agent_response(
+            user_message,
+            session_state=state,
+            user_id=user_id,
+            memory_context=memory_context,
+            system_prompt_override=system_prompt,
+            recent_turns=recent_turns,
+            decisions=decisions,
+            summary=summary,
+        ):
+            t = event.get("type")
+
+            # Pre-flight fallback gate: if the very first event is an
+            # error, the agent never streamed anything to the client,
+            # so legacy fallback is safe.
+            if not saw_any_event:
+                saw_any_event = True
+                if t == "error":
+                    logger.warning("[agent] pre-flight error, falling back: %s",
+                                   event.get("message"))
+                    return None
+
+            if t == "token":
+                accumulated += event.get("text", "")
+                await queue.put({"type": "token", "text": event["text"]})
+            elif t == "tool_call_start":
+                await queue.put({
+                    "type":  "tool_call_start",
+                    "name":  event.get("name"),
+                    "label": event.get("label"),
+                    "args":  event.get("args"),
+                })
+            elif t == "tool_call_done":
+                await queue.put({
+                    "type":  "tool_call_done",
+                    "name":  event.get("name"),
+                    "label": event.get("label"),
+                    "ok":    event.get("ok", True),
+                })
+            elif t == "final":
+                # Tokens were already streamed; nothing extra to forward.
+                pass
+            elif t == "error":
+                # Mid-flight error — surface and stop. No fallback (we
+                # already showed partial output to the user).
+                await queue.put({
+                    "type": "error",
+                    "message": event.get("message", "agent error"),
+                })
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.exception("[agent handler] failed: %s", e)
+        if not accumulated:
+            return None    # nothing shown → safe to fall back
+        await queue.put({"type": "error", "message": str(e)})
+        return (accumulated, [], [], None)
+
+    if not saw_any_event:
+        # Generator yielded zero events — typically LLM_ENABLED=False.
+        return None
+
+    return (accumulated, [], [], None)
+
+
 from fastapi.responses import StreamingResponse
 
 
@@ -1065,7 +1175,24 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                 await queue.put({"type": "token", "text": text})
 
             validation_dict = None
-            if intent == "single_query":
+            # Agent loop first; on pre-flight failure (LLM unreachable
+            # or yielded no events) fall back to the legacy intent-
+            # specific handlers. Mid-flight errors stay visible to the
+            # user — we can't cleanly fall back after streaming has
+            # started without producing duplicate text.
+            agent_result = await _handle_agent(
+                req.message, state, memory_context,
+                user_id=user_id,
+                system_prompt=req.system_prompt,
+                queue=queue,
+                recent_turns=recent_turns,
+                decisions=decisions,
+                summary=summary,
+            )
+            if agent_result is not None:
+                reply, cards, followups, validation_dict = agent_result
+            elif intent == "single_query":
+                logger.info("[stream] agent fallback → _handle_single_query")
                 reply, cards, followups = await _handle_single_query(
                     req.message, state, memory_context,
                     system_prompt=req.system_prompt,
@@ -1075,6 +1202,7 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                     summary=summary,
                 )
             else:
+                logger.info("[stream] agent fallback → _handle_recommendation")
                 reply, cards, followups, validation_dict = await _handle_recommendation(
                     req.message, state, memory_context,
                     session_id=req.session_id, term_str=req.term,
@@ -1092,6 +1220,7 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
             #    then detect decisions ──
             new_turn_index, did_auto_title = _persist_turn(
                 user_id, persistent_sid, req.message, reply,
+                cards=cards, followups=followups, validation=validation_dict,
             )
             _maybe_schedule_auto_title(
                 background_tasks, did_auto_title,

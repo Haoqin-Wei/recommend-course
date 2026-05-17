@@ -208,6 +208,57 @@ If genuinely nothing new: {"preferences": []}
 Maximum 3 preferences per call. Each preference must be one short sentence.
 """
 
+# ── Agent loop system prompt ─────────────────────────────
+AGENT_SYSTEM_PROMPT = """\
+You are a UCI course advisor chatbot. You speak naturally, like a \
+knowledgeable upperclassman who genuinely wants to help — not like a \
+database printout.
+
+# Tools
+
+You have tools to look up real UCI data. Use them aggressively rather than \
+guessing. The student's basics (major, year, completed courses, currently \
+enrolled, term) are in the system context below; for anything more specific \
+— catalog info, sections, grades, professor ratings, prerequisites, schedule \
+conflicts, the student's preferences — call the relevant tool.
+
+Examples of when to call tools:
+- "CS122A 跟 ICS46 冲突吗" → check_section_conflict(course_a="CS122A", course_b="ICS46")
+- "Thornton 评价怎么样"     → get_professor_rating(instructor_name="Thornton, A.")
+- "CS122A 难吗"             → get_grade_distribution(course_id="CS122A")
+- "我能上 CS161 吗"          → check_prerequisites_met(course_id="CS161")  (uses profile)
+- "推荐几门简单的 GE"        → search_courses(ge_category="...") then optionally
+                              get_grade_distribution on each candidate
+
+Rules of thumb:
+- It's fine to chain tools. It's fine to call multiple tools in one turn.
+- Don't call a tool when the answer is already in the student profile / context.
+- Don't call get_course_info just to confirm a course exists — use a more \
+specific tool (get_sections, get_grade_distribution) and rely on its \
+`found=false` / `error` field.
+- If a tool returns `error` or `found=false`, acknowledge it honestly rather \
+than inventing data.
+
+# Answer format
+
+After you have enough data, reply in this structure:
+1. **Conclusion first** — state your direct answer / top 1–3 recommendations
+2. **Reasons** — 1–3 sentences per pick, grounded in the tool results
+3. **Risk warnings** — unmet prereqs, time conflicts, heavy workload
+4. **Alternatives** — if your top pick has issues, suggest a safer backup
+5. **Follow-up questions** — end with 2–3 natural next-step suggestions
+
+# Style
+
+- Match the student's language (Chinese in → Chinese out, English in → English out)
+- Be direct, practical, conversational
+- Convert raw data into judgments ("historically generous grading" not "avg GPA 3.4")
+- Use **bold** for course IDs and key headers
+- Do NOT output a "Data check" / "Validation" / "数据校验" section — the \
+system appends a separate validation footer below your answer.
+"""
+
+
 # ── Round 4: session auto-title prompt ───────────────────
 TITLE_SYSTEM_PROMPT = """\
 You generate a short title for a UCI course advisor conversation.
@@ -472,6 +523,95 @@ async def stream_answer_llm(
     except Exception as e:
         logger.error("stream_answer_llm failed: %s", e)
         return
+
+
+# ── Agent-loop streaming entry point ─────────────────────
+
+async def stream_agent_response(
+    user_message: str,
+    session_state: dict,
+    *,
+    user_id: str,
+    memory_context: Optional[dict] = None,
+    system_prompt_override: Optional[str] = None,
+    recent_turns: Optional[list[dict]] = None,
+    decisions: Optional[list[dict]] = None,
+    summary: Optional[str] = None,
+    profile: Optional[dict] = None,
+    preferences: Optional[list] = None,
+    facts: Optional[list] = None,
+):
+    """
+    Agent-loop variant of stream_answer_llm. Builds the 6-layer
+    context with AGENT_SYSTEM_PROMPT as the base prompt (no
+    retrieved_data block — the agent fetches data itself via tools)
+    and hands it to app.agent.loop.run_agent.
+
+    Yields the agent loop's event protocol verbatim:
+        {"type": "token", "text": ...}            — answer text deltas
+        {"type": "tool_call_start", ...}          — before each tool dispatch
+        {"type": "tool_call_done",  ...}          — after each tool dispatch
+        {"type": "final", "text": ..., ...}       — terminal success
+        {"type": "error", "message": ...}         — bound hit or LLM failure
+
+    Falls back to silent return if LLM_ENABLED is false — chat.py will
+    then drop into the legacy handler path.
+    """
+    if not LLM_ENABLED:
+        return
+
+    from app.llm import context_builder
+    from app.agent.loop import run_agent
+
+    base_system = (
+        system_prompt_override.strip()
+        if (system_prompt_override and system_prompt_override.strip())
+        else AGENT_SYSTEM_PROMPT
+    )
+    # Memory block injection mirrors stream_answer_llm so the agent
+    # has the same persistent-context awareness as the legacy path.
+    fallback_memory_block = None
+    if memory_context and not (profile or preferences or facts):
+        fallback_memory_block = memory_context.get("system_prompt_block")
+    if fallback_memory_block:
+        base_system = (
+            base_system
+            + "\n\n--- Persistent context about this student ---\n"
+            + fallback_memory_block
+        )
+
+    derived_profile = profile or {
+        "major":             session_state.get("major"),
+        "year":              session_state.get("year"),
+        "completed_courses": session_state.get("completed_courses") or [],
+        "selected_courses":  session_state.get("selected_courses") or [],
+    }
+
+    messages = context_builder.build_messages(
+        system_prompt=base_system,
+        user_message=user_message,
+        profile=derived_profile,
+        preferences=preferences,
+        facts=facts,
+        decisions=decisions,
+        summary=summary,
+        recent_turns=recent_turns,
+        retrieved_data=None,    # agent fetches via tools, not prefetch
+        last_n_turns=10,
+    )
+
+    client = _get_client()
+    try:
+        async for event in run_agent(
+            messages, client=client, model=LLM_MODEL, user_id=user_id,
+        ):
+            yield event
+    except asyncio.CancelledError:
+        logger.info("stream_agent_response cancelled (client disconnected)")
+        raise
+    except Exception as e:
+        logger.error("stream_agent_response failed: %s: %s", type(e).__name__, e)
+        yield {"type": "error", "message": str(e)}
 
 
 async def reflect_on_history_llm(
