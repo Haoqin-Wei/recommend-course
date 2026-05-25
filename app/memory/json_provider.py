@@ -204,6 +204,14 @@ class JSONFileMemoryProvider(MemoryProvider):
         self._ensure_loaded(user_id)
         return list(self._loaded[user_id]["preferences"])
 
+    def get_profile(self, user_id: str) -> dict:
+        """Return a shallow copy of the user's persistent profile dict
+        (major, year, target_gpa, completed_courses, selected_courses,
+        ...). Empty dict if nothing recorded — never None so callers
+        don't have to handle both branches."""
+        self._ensure_loaded(user_id)
+        return dict(self._loaded[user_id]["profile"] or {})
+
     # ── Write API ───────────────────────────────────────────
 
     def add_preference(self, user_id: str, text: str) -> None:

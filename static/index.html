@@ -1721,7 +1721,7 @@ input { font-family: inherit; }
     <div class="chat-scroll is-empty" id="chatScroll">
       <div class="welcome-state" id="welcomeState">
         <div class="welcome-greeting" id="welcomeGreeting">What can I help with today?</div>
-        <div class="welcome-sub">Ask about courses, professors, or build your schedule for Spring 2026.</div>
+        <div class="welcome-sub">Ask about courses, professors, or build your schedule for <span id="welcomeTerm">Spring 2026</span>.</div>
         <div class="followups" id="welcomeFollowups">
           <button class="followup-chip" onclick="sendFollowup('Recommend courses for next quarter')">Recommend courses</button>
           <button class="followup-chip" onclick="sendFollowup('What are some easy GE courses?')">Easy GE courses</button>
@@ -1864,6 +1864,11 @@ inputEl.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
 
+// Keep the welcome-state subtitle in sync when the user toggles term.
+// The select exists from page load; loadTerms() only populates options,
+// so attaching the listener immediately is safe.
+document.getElementById('termSelect')?.addEventListener('change', updateWelcomeTerm);
+
 /* ── Boot: populate terms dropdown + cache default prompt ── */
 async function loadTerms() {
   const select = document.getElementById('termSelect');
@@ -1880,12 +1885,18 @@ async function loadTerms() {
     select.innerHTML = terms.map(t =>
       `<option value="${escAttr(t)}"${t === def ? ' selected' : ''}>${escHTML(t)}</option>`
     ).join('');
+    updateWelcomeTerm();  // dropdown now populated — refresh subtitle
   } catch (err) {
     console.warn('Failed to load /api/terms — falling back to static list', err);
+    // Static fallback: mirror what /api/terms currently returns from
+    // CatalogView so the dropdown is usable even when the API is down.
+    // Keep in sync with data/uci/sections.csv coverage.
     select.innerHTML = `
-      <option value="Spring 2025" selected>Spring 2025</option>
-      <option value="Spring 2026">Spring 2026</option>
+      <option value="Spring 2026" selected>Spring 2026</option>
+      <option value="Fall 2026">Fall 2026</option>
+      <option value="Spring 2025">Spring 2025</option>
     `;
+    updateWelcomeTerm();
   }
 }
 
@@ -2321,7 +2332,14 @@ async function addCourse(courseId, section, btnEl) {
     const res = await fetch(`${API}/api/schedule/add`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ session_id: currentSessionId || 'demo_session', course_id: courseId, section: section }),
+      body: JSON.stringify({
+        session_id: currentSessionId || 'demo_session',
+        course_id:  courseId,
+        section:    section,
+        // Term selector value — backend uses this to fetch sections
+        // from the correct quarter (term-strict per the new db layer).
+        term:       document.getElementById('termSelect').value || null,
+      }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -2340,7 +2358,11 @@ async function removeCourse(courseId, btnEl) {
     const res = await fetch(`${API}/api/schedule/remove`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ session_id: currentSessionId || 'demo_session', course_id: courseId }),
+      body: JSON.stringify({
+        session_id: currentSessionId || 'demo_session',
+        course_id:  courseId,
+        term:       document.getElementById('termSelect').value || null,
+      }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -2697,7 +2719,7 @@ function resetChatToWelcome() {
   scrollEl.innerHTML = `
     <div class="welcome-state" id="welcomeState">
       <div class="welcome-greeting" id="welcomeGreeting">What can I help with today?</div>
-      <div class="welcome-sub">Ask about courses, professors, or build your schedule for Spring 2026.</div>
+      <div class="welcome-sub">Ask about courses, professors, or build your schedule for <span id="welcomeTerm">Spring 2026</span>.</div>
       <div class="followups" id="welcomeFollowups">
         <button class="followup-chip" onclick="sendFollowup('Recommend courses for next quarter')">Recommend courses</button>
         <button class="followup-chip" onclick="sendFollowup('What are some easy GE courses?')">Easy GE courses</button>
@@ -2708,6 +2730,18 @@ function resetChatToWelcome() {
   scrollEl.classList.add('is-empty');
   // Re-apply the personalized greeting if we already have profile data.
   loadSidebar();
+  // Sync the term in the welcome sub-line to the current dropdown value.
+  updateWelcomeTerm();
+}
+
+/* Reflect the term selector value into the welcome-state sub-line. */
+function updateWelcomeTerm() {
+  const span = document.getElementById('welcomeTerm');
+  if (!span) return;  // welcome state already replaced by chat messages
+  const term = document.getElementById('termSelect')?.value;
+  // If terms haven't loaded yet, leave the placeholder text alone —
+  // loadTerms() calls us again once the dropdown is populated.
+  if (term) span.textContent = term;
 }
 
 async function loadSession(sessionId) {

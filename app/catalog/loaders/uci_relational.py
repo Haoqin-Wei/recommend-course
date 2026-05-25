@@ -33,6 +33,23 @@ from app.catalog.loaders.base import CatalogLoader
 logger = logging.getLogger(__name__)
 
 
+def _str_or_none(s):
+    """CSV gives '' for missing — coerce to None so downstream consumers
+    can treat 'unknown' uniformly across loaders."""
+    s = (s or "").strip()
+    return s or None
+
+
+def _int_or_none(s):
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
 class UCIRelationalLoader(CatalogLoader):
     def __init__(self, data_dir: str | Path = "data/uci"):
         self.data_dir = Path(data_dir)
@@ -132,6 +149,17 @@ class UCIRelationalLoader(CatalogLoader):
                 term_id=r.get("term_id", ""),
                 instructors=tuple(sorted(set(instructors_by_section.get(sid, [])))),
                 ge_categories=tuple(sorted(set(ge_by_section.get(sid, [])))),
+                # Schedule + capacity (all optional; empty strings → None)
+                section_type=    _str_or_none(r.get("sectionType")),
+                days=            _str_or_none(r.get("days")),
+                start_time=      _str_or_none(r.get("start_time")),
+                end_time=        _str_or_none(r.get("end_time")),
+                location=        _str_or_none(r.get("location")),
+                max_capacity=    _int_or_none(r.get("max_capacity")),
+                section_enrolled=_int_or_none(r.get("section_enrolled")) or _int_or_none(r.get("total_enrolled")),
+                num_on_waitlist= _int_or_none(r.get("num_on_waitlist")),
+                status=          _str_or_none(r.get("status")),
+                is_cancelled=    (r.get("is_cancelled") or "").strip().lower() == "true",
                 provenance=provenance,
             ))
 

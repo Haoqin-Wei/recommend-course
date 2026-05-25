@@ -106,12 +106,36 @@ class CourseRecord:
 
 @dataclass(frozen=True)
 class SectionRecord:
-    """One section of one course in one term."""
+    """One section of one course in one term.
+
+    Time / location / seat fields are populated when the underlying
+    loader has them (the UCIRelationalLoader does — the sections.csv
+    feed carries days/time/capacity per registrar). Loaders that only
+    have catalog-level data leave them None; agent tools / validators
+    must treat None as "unknown" rather than "no class".
+    """
     section_id: str                              # "2025_Spring_34070"
     course: CourseRef
     section_code: str                            # "34070"
     term_id: str                                 # "2025_Spring"
     instructors: tuple[str, ...] = field(default_factory=tuple)
     ge_categories: tuple[str, ...] = field(default_factory=tuple)
-    # Time/location/seats deliberately omitted — not in current data feed.
+    # Schedule + capacity (optional — loader dependent)
+    section_type: Optional[str] = None           # "Lec" / "Dis" / "Lab" / "Sem"
+    days: Optional[str] = None                   # "TuTh" / "MWF" / "F"
+    start_time: Optional[str] = None             # "11:00" (24h "HH:MM")
+    end_time: Optional[str] = None               # "12:20"
+    location: Optional[str] = None               # "DBH 1100"
+    max_capacity: Optional[int] = None
+    section_enrolled: Optional[int] = None
+    num_on_waitlist: Optional[int] = None
+    status: Optional[str] = None                 # "OPEN" / "Waitl" / "FULL" / "NewOnly"
+    is_cancelled: bool = False
     provenance: Optional[Provenance] = None
+
+    @property
+    def seats_open(self) -> Optional[int]:
+        """Available seats = max_capacity - section_enrolled. None if unknown."""
+        if self.max_capacity is None or self.section_enrolled is None:
+            return None
+        return max(0, self.max_capacity - self.section_enrolled)

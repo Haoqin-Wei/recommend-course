@@ -65,13 +65,18 @@ async def run_agent(
     client,
     model: str,
     user_id: str,
+    term: Optional[str] = None,
 ) -> AsyncIterator[dict]:
     """
     Run the agent loop on a prebuilt messages list. `messages` is
     mutated in place (assistant + tool messages are appended each
     round) so the caller can inspect the full trace.
+
+    `term` is the student's currently-selected term (frontend
+    drop-down). It's stored on the tool context so dispatchers can
+    inject it as a default when the model forgets to pass `term=...`.
     """
-    tool_context = {"user_id": user_id}
+    tool_context = {"user_id": user_id, "term": term}
     total_tool_calls = 0
 
     for iteration in range(MAX_ITERATIONS):
@@ -196,6 +201,19 @@ async def run_agent(
                    "name": tc["name"], "args": args, "label": label}
 
             result = agent_tools.dispatch(tc["name"], args, context=tool_context)
+            # Some tool dispatchers (e.g. summarize_professor_reviews,
+            # which calls the LLM internally) return a coroutine instead
+            # of a dict. Await it here so the tool response is always a
+            # plain dict by the time we serialize it.
+            if asyncio.iscoroutine(result):
+                try:
+                    result = await result
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning("[agent] async tool %s failed: %s: %s",
+                                   tc["name"], type(e).__name__, e)
+                    result = {"error": f"{type(e).__name__}: {e}"}
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],

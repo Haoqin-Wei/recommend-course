@@ -44,11 +44,11 @@ from app.modules.clarification import (
     build_clarification_response, extract_info_from_message,
 )
 from app.modules.query import (
-    query_course_recommendations, query_single_course, query_professor,
+    query_course_recommendations, query_single_course,
 )
 from app.modules.answer import (
     generate_recommendation_answer, generate_single_query_answer,
-    generate_professor_answer, generate_off_topic_response,
+    generate_off_topic_response,
 )
 from app.modules.followup import generate_followups, generate_single_query_followups
 from app.memory import get_memory_manager
@@ -671,7 +671,10 @@ async def _handle_recommendation(
 ):
     from app.llm.adapter import generate_answer_llm
     results = query_course_recommendations(
-        term=state.get("term", "Fall 2025"), major=state.get("major"),
+        # No default — the agent path is primary now; if this legacy
+        # handler runs without a term in session state, let it fail
+        # explicitly rather than silently routing to a wrong term.
+        term=state.get("term"), major=state.get("major"),
         completed_courses=state.get("completed_courses", []),
         selected_courses=state.get("selected_courses", []),
         difficulty_preference=state.get("difficulty_preference"),
@@ -837,16 +840,12 @@ async def _handle_single_query(message, state, memory_context=None, system_promp
                     await on_token(ans)        # fallback also reaches the stream
             fu = generate_single_query_followups(course_id, state)
             return ans, [card], fu
-    from app.data.mock_data import PROFESSOR_RATINGS
-    for name in PROFESSOR_RATINGS:
-        if name.lower().split(",")[0] in ml:
-            rating = query_professor(name)
-            ans = await _call_llm({"professor": name, "rating": rating})
-            if not ans:
-                ans = generate_professor_answer(name, rating)
-                if on_token:
-                    await on_token(ans)
-            return ans, [], []
+    # (Legacy: the old code looped over mock_data.PROFESSOR_RATINGS here
+    # to handle "how is professor X" queries. That mock table is gone —
+    # the agent's get_professor_rating tool hits Anteater /instructors
+    # directly. This branch is unreachable in the current pipeline; left
+    # as a no-op rather than restored so the fallback path doesn't try
+    # to invent professors out of nothing.)
 
     # ── Phase 3.4 polish: referential follow-up resolution ──
     # The user's current message has no explicit course ID or
@@ -935,6 +934,7 @@ async def _handle_agent(
     memory_context: Optional[dict],
     *,
     user_id: str,
+    term: Optional[str],
     system_prompt: Optional[str],
     queue: asyncio.Queue,
     recent_turns: Optional[list[dict]] = None,
@@ -967,6 +967,7 @@ async def _handle_agent(
             user_message,
             session_state=state,
             user_id=user_id,
+            term=term,
             memory_context=memory_context,
             system_prompt_override=system_prompt,
             recent_turns=recent_turns,
@@ -1138,31 +1139,15 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                 })
                 return
 
-            if needs_clarification(session, intent):
-                missing = detect_missing_fields(session, intent)
-                reply = build_clarification_response(missing)
-                add_message(req.session_id, "assistant", reply)
-                mem.sync_turn(user_id, req.message, reply, req.session_id)
-                _, did_auto_title = _persist_turn(
-                    user_id, persistent_sid, req.message, reply,
-                )
-                _maybe_schedule_auto_title(
-                    background_tasks, did_auto_title,
-                    user_id, persistent_sid, req.message, reply,
-                )
-                _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
-                await queue.put({"type": "token", "text": reply})
-                await queue.put({
-                    "type": "meta",
-                    "session_id": persistent_sid,
-                    "intent": intent,
-                    "cards": [],
-                    "followups": [],
-                    "validation_report": None,
-                    "session_state": get_known_fields(req.session_id),
-                    "pending_schedule": session.get("pending_schedule", []),
-                })
-                return
+            # NOTE: legacy `needs_clarification` short-circuit lived here.
+            # It returned a hardcoded English "I'd love to help! A few
+            # quick questions first..." template — which (a) ignored the
+            # student's language and (b) ignored that the term was
+            # already selected in the dropdown. The agent loop below
+            # handles underspecified queries correctly: it sees the
+            # selected term in its system context, calls tools to fill
+            # gaps, and asks its own clarifying questions in the user's
+            # language if any are truly needed.
 
             state = get_known_fields(req.session_id)
             if req.term and req.term != state.get("term"):
@@ -1183,6 +1168,7 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
             agent_result = await _handle_agent(
                 req.message, state, memory_context,
                 user_id=user_id,
+                term=req.term or state.get("term"),
                 system_prompt=req.system_prompt,
                 queue=queue,
                 recent_turns=recent_turns,
@@ -1278,6 +1264,10 @@ class ScheduleRequest(BaseModel):
     session_id: str = "demo_session"
     course_id: str
     section: str = "A"
+    # Frontend passes the term selector value; backend uses it to fetch
+    # the right sections from db.get_sections (term-strict). None falls
+    # back to session-state term, then to the catalog registry default.
+    term: Optional[str] = None
 
 
 @router.post("/schedule/add")
@@ -1287,7 +1277,7 @@ async def add_to_schedule(req: ScheduleRequest):
     existing_ids = [e["course_id"] for e in session.get("pending_schedule", [])]
     if req.course_id not in existing_ids:
         session.setdefault("pending_schedule", []).append(entry)
-    events = _build_schedule_events(session)
+    events = _build_schedule_events(session, req.term)
     return {"ok": True, "pending_schedule": session["pending_schedule"], "events": events}
 
 
@@ -1297,7 +1287,7 @@ async def remove_from_schedule(req: ScheduleRequest):
     session["pending_schedule"] = [
         e for e in session.get("pending_schedule", []) if e["course_id"] != req.course_id
     ]
-    events = _build_schedule_events(session)
+    events = _build_schedule_events(session, req.term)
     return {"ok": True, "pending_schedule": session["pending_schedule"], "events": events}
 
 
@@ -1328,24 +1318,73 @@ def _parse_days(s):
             i += 1
     return result
 
-def _build_schedule_events(session):
+def _build_schedule_events(session, term: Optional[str] = None):
+    """
+    Materialize the session's pending_schedule into calendar events.
+
+    Resolves `term` in this order:
+      1. explicit arg (frontend's term selector)
+      2. session state ("term" key set by the chat pipeline)
+      3. catalog registry's default term (most recently loaded data)
+
+    Uses db.get_sections's new envelope shape ({found, sections: [...]})
+    plus the extended SectionRecord fields (section_code / days /
+    start_time / end_time / instructors[]).
+    """
     from app.data.db import get_sections, get_course_info
+    from app.catalog import get_term_registry
+
+    resolved_term = term or session.get("term")
+    if not resolved_term:
+        default_term = get_term_registry().default()
+        if default_term:
+            resolved_term = default_term.display()
+    if not resolved_term:
+        return []  # nothing we can ground sections in
+
     events = []
     for entry in session.get("pending_schedule", []):
         cid, sid = entry["course_id"], entry.get("section", "A")
-        course = get_course_info(cid)
-        sections = get_sections(cid, session.get("term", "Fall 2025"))
-        sec = next((s for s in sections if s["section"] == sid), sections[0] if sections else None)
-        if not sec:
+
+        course_env = get_course_info(cid)
+        title = (
+            course_env.get("course", {}).get("title", cid)
+            if course_env.get("found") else cid
+        )
+
+        sec_env = get_sections(cid, resolved_term)
+        sections = sec_env.get("sections", []) if sec_env.get("found") else []
+        if not sections:
             continue
-        tp = sec["time"].split("-")
-        if len(tp) != 2:
-            continue
-        for day in _parse_days(sec["days"]):
+
+        # Match the requested section_code; otherwise grab the first
+        # lecture-like section (Lec > Sem > anything) so the calendar
+        # shows the primary meeting, not a Friday Dis.
+        sec = next((s for s in sections if s.get("section_code") == sid), None)
+        if sec is None:
+            lec_order = {"Lec": 0, "Sem": 1, "Stu": 2}
+            sec = sorted(
+                sections,
+                key=lambda s: lec_order.get(s.get("section_type") or "", 99),
+            )[0]
+
+        start, end = sec.get("start_time"), sec.get("end_time")
+        days_str = sec.get("days")
+        if not (start and end and days_str):
+            continue  # async / TBA sections have no calendar slot
+
+        instructors = sec.get("instructors") or []
+        primary_instructor = instructors[0] if instructors else ""
+
+        for day in _parse_days(days_str):
             events.append({
-                "course_id": cid, "title": course["title"] if course else cid,
-                "section": sec["section"], "instructor": sec["instructor"],
-                "day": day, "start": tp[0].strip(), "end": tp[1].strip(),
-                "location": sec.get("location", ""),
+                "course_id":  cid,
+                "title":      title,
+                "section":    sec.get("section_code", sid),
+                "instructor": primary_instructor,
+                "day":        day,
+                "start":      start,
+                "end":        end,
+                "location":   sec.get("location") or "",
             })
     return events

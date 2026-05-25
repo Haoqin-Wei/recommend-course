@@ -198,6 +198,8 @@ def build_messages(
     summary: Optional[str] = None,
     recent_turns: Optional[list[dict]] = None,
     retrieved_data: Optional[dict] = None,
+    selected_term: Optional[str] = None,
+    today: Optional[str] = None,
     last_n_turns: int = 10,
 ) -> list[dict]:
     """
@@ -222,6 +224,26 @@ def build_messages(
     """
     # ── Layer 1-4: system block ──
     system_parts = [system_prompt.strip()] if system_prompt else []
+
+    # Selected term + today's date go near the TOP of the system
+    # context, before the memory snapshot, so the model can't miss
+    # them. These are per-turn state (user can change the dropdown
+    # between messages; date changes daily) — that's why they live
+    # here rather than in the durable profile snapshot.
+    context_lines: list[str] = []
+    if today:
+        context_lines.append(f"Today's date: **{today}**.")
+    if selected_term:
+        context_lines.append(
+            f"Student's currently selected term: **{selected_term}**. "
+            f"Use this whenever a tool needs a `term` argument. Do not "
+            f"ask the student which term — it's already chosen. "
+            f"Reason about whether this term is past / currently in "
+            f"session (past week 2 add/drop deadline) / upcoming, and "
+            f"frame your advice accordingly per the UCI policies above."
+        )
+    if context_lines:
+        system_parts.append("# Current request context\n" + "\n\n".join(context_lines))
 
     mem = build_memory_snapshot(profile, preferences, facts)
     if mem:
