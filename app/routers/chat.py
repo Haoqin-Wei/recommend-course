@@ -1003,6 +1003,20 @@ async def _handle_agent(
                     "label": event.get("label"),
                     "ok":    event.get("ok", True),
                 })
+            elif t == "limit_reached":
+                # Budget hit. The loop will keep streaming token/final
+                # events from its no-tools fallback after this; the
+                # continuation_id lets the frontend offer a Continue
+                # button that POSTs to /api/chat/continue.
+                logger.info("[agent handler] forwarding limit_reached: reason=%s cid=%s",
+                            event.get("reason"), (event.get("continuation_id") or "")[:8])
+                await queue.put({
+                    "type":  "limit_reached",
+                    "reason": event.get("reason"),
+                    "iterations": event.get("iterations"),
+                    "tool_calls": event.get("tool_calls"),
+                    "continuation_id": event.get("continuation_id"),
+                })
             elif t == "final":
                 # Tokens were already streamed; nothing extra to forward.
                 pass
@@ -1256,6 +1270,88 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
     finally:
         if not task.done():
             task.cancel()
+
+
+# ── Continue endpoint (resume after limit_reached) ───────
+
+class ContinueRequest(BaseModel):
+    session_id: str = "demo_session"
+    continuation_id: str
+    student_id: Optional[str] = None
+
+
+@router.post("/chat/continue")
+async def chat_continue_endpoint(req: ContinueRequest):
+    """
+    Resume an agent loop that hit its budget. The frontend calls this
+    when the user clicks the "Continue" button rendered after a
+    limit_reached event. Streams the same SSE event protocol as
+    /chat/stream.
+
+    The continuation_id is single-use — pop_continuation removes it
+    from the in-memory store, so a refresh / double-click can't
+    accidentally double-bill the budget.
+    """
+    return StreamingResponse(
+        _stream_continue(req),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _stream_continue(req: ContinueRequest):
+    import json as _json
+    from app.agent.loop import resume_agent
+    from app.llm.adapter import _get_client, LLM_MODEL, LLM_ENABLED
+
+    def sse(event: dict) -> str:
+        return f"data: {_json.dumps(event, ensure_ascii=False)}\n\n"
+
+    if not LLM_ENABLED:
+        yield sse({"type": "error", "message": "LLM not enabled"})
+        yield sse({"type": "done"})
+        return
+
+    user_id = req.student_id or "demo_001"
+    accumulated = ""
+    saw_limit_again = False
+    try:
+        client = _get_client()
+        async for event in resume_agent(
+            req.continuation_id,
+            client=client, model=LLM_MODEL,
+        ):
+            t = event.get("type")
+            if t == "token":
+                accumulated += event.get("text", "")
+            elif t == "limit_reached":
+                saw_limit_again = True
+            yield sse(event)
+
+        # Persist the resumed reply to the session log so refresh /
+        # session reload doesn't lose it. We don't run the full memory
+        # pipeline here (no new user message); just append the text.
+        if accumulated:
+            try:
+                add_message(req.session_id, "assistant", accumulated)
+            except Exception as e:
+                logger.warning("[continue] add_message failed: %s", e)
+
+        logger.info("[continue] cid=%s user=%s session=%s chars=%d limit_again=%s",
+                    req.continuation_id, user_id, req.session_id,
+                    len(accumulated), saw_limit_again)
+    except asyncio.CancelledError:
+        logger.info("[continue] cancelled by client")
+        raise
+    except Exception as e:
+        logger.exception("[continue] failed: %s", e)
+        yield sse({"type": "error", "message": str(e)})
+    finally:
+        yield sse({"type": "done"})
 
 
 # ── Schedule endpoints ───────────────────────────────────

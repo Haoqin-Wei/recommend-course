@@ -795,6 +795,48 @@ input { font-family: inherit; }
   50%      { opacity: 0.4; transform: scale(0.85); }
 }
 
+/* ── Limit-reached banner + Continue button ────────── */
+/*
+   When the agent loop hits MAX_ITERATIONS or MAX_TOTAL_TOOLS, the
+   backend stashes the conversation, emits a fallback answer, and
+   sends a continuation_id. We render this banner under the message
+   so the user can opt in to extending the budget.
+*/
+.limit-notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(199, 155, 58, 0.06);
+  border: 1px solid rgba(199, 155, 58, 0.25);
+  border-radius: var(--radius-md);
+  font-size: var(--text-secondary-size);
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.limit-notice-text { flex: 1; }
+.continue-btn {
+  font-size: var(--text-secondary-size);
+  font-weight: var(--weight-medium);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+.continue-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--text-tertiary);
+}
+.continue-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 
 /* ── Typing indicator ──────────────────────────────── */
 .typing-bar {
@@ -2013,6 +2055,13 @@ async function sendMessage(text) {
           startToolChip(aiMsg, event.label || event.name);
         } else if (event.type === 'tool_call_done') {
           finishToolChip(aiMsg, event.ok !== false);
+        } else if (event.type === 'limit_reached') {
+          // Agent hit its budget. Stash the continuation_id on the
+          // message so finalizeAiMessage can render a Continue button
+          // after the fallback answer finishes streaming.
+          console.log('[chat] limit_reached:', event);
+          aiMsg._continuationId = event.continuation_id;
+          aiMsg._limitReason    = event.reason;
         } else if (event.type === 'error') {
           console.error('Stream error event:', event.message);
           fullText += `\n\n_(server error: ${event.message})_`;
@@ -2189,7 +2238,142 @@ function finalizeAiMessage(wrap, fullText, meta, stopped) {
     wrap.appendChild(vDiv.firstElementChild);
   }
 
+  // Continue button — only when the agent loop hit a budget limit
+  // and stashed a continuation_id during this stream. Skip when the
+  // user explicitly stopped generation (would re-bill on resume).
+  if (!stopped && wrap._continuationId) {
+    renderContinueBanner(wrap, wrap._continuationId, wrap._limitReason);
+  }
+
   scrollChat();
+}
+
+function renderContinueBanner(wrap, continuationId, reason) {
+  // Avoid stacking multiple banners on the same message if finalize
+  // is called more than once (defensive — shouldn't happen).
+  const existing = wrap.querySelector(':scope > .limit-notice');
+  if (existing) existing.remove();
+
+  const reasonText = reason === 'max_tool_calls'
+    ? '已达到工具调用上限，下面是基于已收集信息的回答。'
+    : '已达到推理步数上限，下面是基于已收集信息的回答。';
+
+  const notice = document.createElement('div');
+  notice.className = 'limit-notice';
+  notice.innerHTML = `
+    <div class="limit-notice-text">${reasonText}</div>
+    <button class="continue-btn" type="button">继续探索</button>
+  `;
+  notice.querySelector('.continue-btn').addEventListener('click', (ev) => {
+    continueAgent(wrap, continuationId, ev.currentTarget);
+  });
+  wrap.appendChild(notice);
+}
+
+async function continueAgent(wrap, continuationId, btn) {
+  // Lock the button so a double-click can't fire two resumes (and the
+  // backend pops the continuation_id anyway, but better UX to disable).
+  btn.disabled = true;
+  btn.textContent = '继续中…';
+
+  // Append a fresh body section for the resumed answer so the original
+  // fallback reply stays visible above. Without this the new tokens
+  // would overwrite the fallback answer in place.
+  const resumeBody = document.createElement('div');
+  resumeBody.className = 'msg-ai-body streaming';
+  resumeBody.style.marginTop = 'var(--space-3)';
+  resumeBody.style.borderTop = '1px solid var(--border-subtle)';
+  resumeBody.style.paddingTop = 'var(--space-3)';
+  resumeBody.textContent = '';
+  // Insert above the limit-notice so the layout reads: original
+  // answer → resumed answer → (any further notice).
+  const notice = wrap.querySelector(':scope > .limit-notice');
+  wrap.insertBefore(resumeBody, notice);
+
+  // Build a synthetic render target reusing startAiMessage's contract
+  // so we can pipe SSE events through the existing helpers.
+  const resumeShell = {
+    _pendingFrame: null,
+    _pendingText:  '',
+    _gotFirstToken: true,  // skip the thinking shimmer — we're mid-message
+    _toolChipQueue: [],
+    querySelector: (sel) => sel === '.msg-ai-body' ? resumeBody : null,
+  };
+
+  let resumedText = '';
+  let newContinuationId = null;
+  let newReason = null;
+
+  try {
+    const res = await fetch(`${API}/api/chat/continue`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        session_id: currentSessionId || '',
+        continuation_id: continuationId,
+      }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      let sepIdx;
+      while ((sepIdx = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, sepIdx);
+        buffer = buffer.slice(sepIdx + 2);
+        if (!block.startsWith('data: ')) continue;
+        let event;
+        try { event = JSON.parse(block.slice(6)); }
+        catch (e) { continue; }
+
+        if (event.type === 'token') {
+          resumedText += event.text;
+          appendStreamingToken(resumeShell, resumedText);
+        } else if (event.type === 'tool_call_start') {
+          // Reuse the existing chip container on `wrap`. Pass the
+          // real wrap, not the shell, so chips land in the right DOM.
+          startToolChip(wrap, event.label || event.name);
+        } else if (event.type === 'tool_call_done') {
+          finishToolChip(wrap, event.ok !== false);
+        } else if (event.type === 'limit_reached') {
+          newContinuationId = event.continuation_id;
+          newReason = event.reason;
+        } else if (event.type === 'error') {
+          resumedText += `\n\n_(continue error: ${event.message})_`;
+          appendStreamingToken(resumeShell, resumedText);
+        }
+        // 'done' just terminates the stream
+      }
+    }
+  } catch (err) {
+    console.error('continue failed:', err);
+    resumedText += `\n\n_(continue failed: ${err.message || err})_`;
+    appendStreamingToken(resumeShell, resumedText);
+  } finally {
+    // Flush any pending frame and remove the streaming class
+    if (resumeShell._pendingFrame) {
+      cancelAnimationFrame(resumeShell._pendingFrame);
+      resumeShell._pendingFrame = null;
+    }
+    resumeBody.classList.remove('streaming');
+    resumeBody.innerHTML = formatMarkdown(resumedText || '');
+
+    // Replace the old notice. If the resumed loop ALSO hit a limit,
+    // render a fresh Continue banner with the new continuation_id;
+    // otherwise just drop the original banner since we're done.
+    if (notice) notice.remove();
+    wrap._continuationId = null;
+    wrap._limitReason    = null;
+    if (newContinuationId) {
+      renderContinueBanner(wrap, newContinuationId, newReason);
+    }
+    scrollChat();
+  }
 }
 
 function appendUser(text) {
