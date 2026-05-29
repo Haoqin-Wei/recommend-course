@@ -3,12 +3,7 @@
   "year": "Sophomore",
   "target_gpa": 3.7,
   "completed_courses": [
-    "ICS31",
-    "ICS32",
-    "MATH2A",
-    "MATH2B",
-    "WRITING39A",
-    "WRITING39B"
+    "ACENG20A"
   ],
   "selected_courses": [
     "ICS33",

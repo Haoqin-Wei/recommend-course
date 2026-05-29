@@ -30,10 +30,11 @@ import asyncio
 import logging
 import re
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
 from typing import Optional
 
+from app.auth.deps import current_user_optional
 from app.modules.intent import classify_intent
 from app.modules.state import (
     get_or_create_session, update_session, add_message,
@@ -48,7 +49,6 @@ from app.modules.query import (
 )
 from app.modules.answer import (
     generate_recommendation_answer, generate_single_query_answer,
-    generate_off_topic_response,
 )
 from app.modules.followup import generate_followups, generate_single_query_followups
 from app.memory import get_memory_manager
@@ -499,15 +499,22 @@ def _course_ids_in_order(text: str) -> list[str]:
 # ── Main chat endpoint ───────────────────────────────────
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
-    user_id = req.student_id or "anonymous"
+async def chat(
+    req: ChatRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(current_user_optional),
+):
+    # student_id in the request body is ignored — authoritative user id
+    # comes from the session cookie via current_user_optional (anonymous
+    # callers fall back to demo_001 so legacy demo keeps working).
+    user_id = user["id"]
     mem = get_memory_manager()
 
     mem.initialize_session(req.session_id, user_id)
 
     session = get_or_create_session(req.session_id)
-    if not session.get("major") and req.student_id:
-        load_student_into_session(req.session_id, req.student_id)
+    if not session.get("major"):
+        load_student_into_session(req.session_id, user_id)
         session = get_or_create_session(req.session_id)
 
     add_message(req.session_id, "user", req.message)
@@ -519,7 +526,7 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
     )
 
     # ── Channel A ──
-    extracted = await extract_info_from_message(req.message, session)
+    extracted = await extract_info_from_message(req.message)
     if extracted:
         logger.info("[Channel A] extracted from message: %s", extracted)
         _capture_hard_facts(session, extracted, user_id, mem)
@@ -546,13 +553,11 @@ async def chat(req: ChatRequest, background_tasks: BackgroundTasks):
         "prefetched_context": mem.prefetch(req.message, user_id),
     }
 
-    if intent == "off_topic":
-        reply = generate_off_topic_response(req.message)
-        add_message(req.session_id, "assistant", reply)
-        mem.sync_turn(user_id, req.message, reply, req.session_id)
-        _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
-        return ChatResponse(reply=reply, intent=intent,
-                            session_state=get_known_fields(req.session_id))
+    # off_topic used to short-circuit with a hardcoded template here;
+    # removed for the same reason as the streaming path — the
+    # classifier sees only the latest message and can't tell "继续"
+    # from genuine off-topic. Let the downstream handlers + LLM
+    # handle these cases with conversation context instead.
 
     if needs_clarification(session, intent):
         missing = detect_missing_fields(session, intent)
@@ -1047,9 +1052,13 @@ from fastapi.responses import StreamingResponse
 
 
 @router.post("/chat/stream")
-async def chat_stream_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
+async def chat_stream_endpoint(
+    req: ChatRequest,
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(current_user_optional),
+):
     return StreamingResponse(
-        _stream_chat(req, background_tasks),
+        _stream_chat(req, background_tasks, user["id"]),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1059,8 +1068,11 @@ async def chat_stream_endpoint(req: ChatRequest, background_tasks: BackgroundTas
     )
 
 
-async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
-    """Async generator yielding SSE-formatted events."""
+async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks, user_id: str):
+    """Async generator yielding SSE-formatted events. `user_id` is resolved
+    from the session cookie in the entry-point endpoint and passed in
+    rather than re-derived here, since dependencies don't compose into
+    inner async-generator scopes."""
     import asyncio
     import json as _json
 
@@ -1074,15 +1086,16 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
         """Run the full chat pipeline, pushing events into the queue."""
         try:
             mem = get_memory_manager()
-            user_id = req.student_id or "demo_001"
+            # user_id from the session cookie (or demo_001 fallback);
+            # req.student_id from the body is ignored.
 
             # ── Phase 3.3: resolve the request's session_id to a persistent one ──
             persistent_sid = _resolve_session_id(req.session_id, user_id, req.term)
 
             session = get_or_create_session(req.session_id)
             _hydrate_state_from_session(user_id, persistent_sid, session)
-            if not session.get("major") and req.student_id:
-                load_student_into_session(req.session_id, req.student_id)
+            if not session.get("major"):
+                load_student_into_session(req.session_id, user_id)
                 session = get_or_create_session(req.session_id)
 
             add_message(req.session_id, "user", req.message)
@@ -1092,7 +1105,7 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                         persistent_sid, req.message[:120])
 
             # Channel A
-            extracted = await extract_info_from_message(req.message, session)
+            extracted = await extract_info_from_message(req.message)
             if extracted:
                 _capture_hard_facts(session, extracted, user_id, mem)
                 if extracted:
@@ -1127,31 +1140,17 @@ async def _stream_chat(req: ChatRequest, background_tasks: BackgroundTasks):
                 decisions    = []
                 summary      = None
 
-            # ── Short paths: deliver whole reply at once ──
-            if intent == "off_topic":
-                reply = generate_off_topic_response(req.message)
-                add_message(req.session_id, "assistant", reply)
-                mem.sync_turn(user_id, req.message, reply, req.session_id)
-                _, did_auto_title = _persist_turn(
-                    user_id, persistent_sid, req.message, reply,
-                )
-                _maybe_schedule_auto_title(
-                    background_tasks, did_auto_title,
-                    user_id, persistent_sid, req.message, reply,
-                )
-                _maybe_schedule_reflection(background_tasks, mem, req.session_id, user_id, session)
-                await queue.put({"type": "token", "text": reply})
-                await queue.put({
-                    "type": "meta",
-                    "session_id": persistent_sid,
-                    "intent": intent,
-                    "cards": [],
-                    "followups": [],
-                    "validation_report": None,
-                    "session_state": get_known_fields(req.session_id),
-                    "pending_schedule": session.get("pending_schedule", []),
-                })
-                return
+            # NOTE: the off_topic short-circuit that used to live here
+            # was removed. It rendered a hardcoded English "I'm your
+            # UCI course advisor..." template whenever classify_intent
+            # tagged a message off_topic — but the classifier only
+            # sees the latest message, so short replies like "继续",
+            # "需要", "yes" routinely tripped it. Now every message
+            # flows into the agent loop, which has the conversation
+            # history (recent_turns) and can interpret continuations
+            # in context. The agent's system prompt handles genuinely
+            # off-topic questions (weather, food, etc.) by politely
+            # redirecting in the user's language.
 
             # NOTE: legacy `needs_clarification` short-circuit lived here.
             # It returned a hardcoded English "I'd love to help! A few
@@ -1281,7 +1280,10 @@ class ContinueRequest(BaseModel):
 
 
 @router.post("/chat/continue")
-async def chat_continue_endpoint(req: ContinueRequest):
+async def chat_continue_endpoint(
+    req: ContinueRequest,
+    user: dict = Depends(current_user_optional),
+):
     """
     Resume an agent loop that hit its budget. The frontend calls this
     when the user clicks the "Continue" button rendered after a
@@ -1293,7 +1295,7 @@ async def chat_continue_endpoint(req: ContinueRequest):
     accidentally double-bill the budget.
     """
     return StreamingResponse(
-        _stream_continue(req),
+        _stream_continue(req, user["id"]),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -1303,7 +1305,7 @@ async def chat_continue_endpoint(req: ContinueRequest):
     )
 
 
-async def _stream_continue(req: ContinueRequest):
+async def _stream_continue(req: ContinueRequest, user_id: str):
     import json as _json
     from app.agent.loop import resume_agent
     from app.llm.adapter import _get_client, LLM_MODEL, LLM_ENABLED
@@ -1316,7 +1318,8 @@ async def _stream_continue(req: ContinueRequest):
         yield sse({"type": "done"})
         return
 
-    user_id = req.student_id or "demo_001"
+    # user_id is resolved from the session cookie by the caller;
+    # req.student_id from the body is ignored.
     accumulated = ""
     saw_limit_again = False
     try:

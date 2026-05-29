@@ -26,8 +26,10 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
+from app.auth.deps import current_user_optional
 from app.data.uci_general.major_requirements import (
     get_major, compute_progress,
 )
@@ -40,16 +42,19 @@ MEMORY_ROOT = Path("data/memory")
 
 # ── Helpers ──────────────────────────────────────────────
 
-def _user_dir(user_id: str) -> Path:
-    """Resolve and validate a user's memory dir. Raises 4xx on bad input."""
-    # Defensive: prevent path traversal.
+def _user_dir(user_id: str, *, create: bool = False) -> Path:
+    """
+    Resolve a user's memory dir. Path traversal is rejected. If
+    create=True, the dir is mkdir'd on demand — used by write
+    endpoints so a freshly-signed-up account doesn't have to seed
+    its directory before its first write. Read endpoints pass
+    create=False and handle the missing-dir case themselves.
+    """
     if not user_id or "/" in user_id or "\\" in user_id or ".." in user_id:
         raise HTTPException(status_code=400, detail="Invalid user_id")
     path = MEMORY_ROOT / user_id
-    if not path.exists() or not path.is_dir():
-        raise HTTPException(
-            status_code=404, detail=f"No memory directory for user {user_id!r}",
-        )
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
     return path
 
 
@@ -89,10 +94,29 @@ def _major_slug_from_profile(profile: dict) -> Optional[str]:
 
 
 # ── GET snapshot ─────────────────────────────────────────
+#
+# Endpoint paths still take {user_id} for backward compatibility with
+# the existing frontend (USER_ID = 'demo_001'), but the authoritative
+# user id comes from the session cookie via current_user_optional.
+# Unauthenticated callers fall back to demo_001 — the legacy demo
+# flow keeps working with no frontend change required.
 
 @router.get("/api/memory/{user_id}")
-def get_memory(user_id: str):
-    user_dir = _user_dir(user_id)
+def get_memory(user_id: str, user: dict = Depends(current_user_optional)):
+    real_user_id = user["id"]
+    user_dir = _user_dir(real_user_id)
+
+    # Brand-new authenticated account: dir hasn't been written yet.
+    # Return empty payload rather than 404 — the frontend treats this
+    # as "first-time user" and triggers onboarding (Phase C).
+    if not user_dir.exists() or not user_dir.is_dir():
+        return {
+            "user_id": real_user_id,
+            "profile": {},
+            "facts":   {},
+            "preferences": [],
+            "major_progress": None,
+        }
 
     profile = _read_json(user_dir / "profile.json", default={}) or {}
     prefs   = _read_json(user_dir / "preferences.json", default=[]) or []
@@ -122,7 +146,7 @@ def get_memory(user_id: str):
             progress["slug"]   = slug
 
     return {
-        "user_id": user_id,
+        "user_id": real_user_id,
         "profile": profile,
         "facts":   facts,
         "preferences": prefs,
@@ -130,12 +154,81 @@ def get_memory(user_id: str):
     }
 
 
+# ── POST profile (onboarding write + later profile-editor) ──
+#
+# Generic merge-update endpoint. Used by:
+#   - Phase C onboarding wizard (writes major/year/school + courses)
+#   - Phase D profile editor (toggles completed_courses)
+# Path user_id is ignored — real user comes from session cookie.
+# For brand-new users we mkdir on demand so the wizard's very first
+# save doesn't 404.
+
+class ProfileUpdate(BaseModel):
+    major:             Optional[str]       = None
+    year:              Optional[str]       = None
+    college:           Optional[str]       = None
+    school_slug:       Optional[str]       = None
+    program_id:        Optional[str]       = None  # Anteater id, e.g. "BS-201"
+    completed_courses: Optional[list[str]] = None
+    selected_courses:  Optional[list[str]] = None
+
+
+@router.post("/api/memory/{user_id}/profile")
+def update_profile(
+    user_id: str, body: ProfileUpdate,
+    user: dict = Depends(current_user_optional),
+):
+    real_user_id = user["id"]
+    user_dir = _user_dir(real_user_id, create=True)
+    path = user_dir / "profile.json"
+
+    profile = _read_json(path, default={}) or {}
+    if not isinstance(profile, dict):
+        profile = {}
+
+    updates = body.model_dump(exclude_none=True)
+    # Treat "" / [] as "skip" so partial submissions don't blank fields
+    # the user didn't touch on this round. Lists are deduplicated +
+    # stable-sorted so re-submits don't churn the file.
+    cleaned: dict = {}
+    for k, v in updates.items():
+        if isinstance(v, str):
+            v = v.strip()
+            if v:
+                cleaned[k] = v
+        elif isinstance(v, list):
+            # Drop empties + dedupe (preserve first-seen order)
+            seen, deduped = set(), []
+            for item in v:
+                if not isinstance(item, str): continue
+                item = item.strip().upper()
+                if item and item not in seen:
+                    seen.add(item)
+                    deduped.append(item)
+            if deduped:
+                cleaned[k] = deduped
+
+    if not cleaned:
+        return {"ok": True, "profile": profile, "updated": []}
+
+    profile.update(cleaned)
+    _write_json(path, profile)
+    return {"ok": True, "profile": profile, "updated": list(cleaned.keys())}
+
+
 # ── DELETE one preference ────────────────────────────────
 
 @router.delete("/api/memory/{user_id}/preferences/{pref_id}")
-def forget_preference(user_id: str, pref_id: str):
-    user_dir = _user_dir(user_id)
+def forget_preference(
+    user_id: str, pref_id: str,
+    user: dict = Depends(current_user_optional),
+):
+    real_user_id = user["id"]
+    user_dir = _user_dir(real_user_id)
     pref_path = user_dir / "preferences.json"
+
+    if not pref_path.exists():
+        raise HTTPException(status_code=404, detail="No preferences stored")
 
     prefs = _read_json(pref_path, default=[])
     if not isinstance(prefs, list):
@@ -159,8 +252,12 @@ def forget_preference(user_id: str, pref_id: str):
 # ── POST forget all preferences ──────────────────────────
 
 @router.post("/api/memory/{user_id}/preferences/forget_all")
-def forget_all_preferences(user_id: str):
-    user_dir = _user_dir(user_id)
+def forget_all_preferences(
+    user_id: str,
+    user: dict = Depends(current_user_optional),
+):
+    real_user_id = user["id"]
+    user_dir = _user_dir(real_user_id, create=True)
     pref_path = user_dir / "preferences.json"
 
     prefs = _read_json(pref_path, default=[])

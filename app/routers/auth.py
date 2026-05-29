@@ -1,0 +1,184 @@
+"""
+Auth router — email-code registration + password login.
+
+Flow (frontend perspective):
+
+    1. POST /api/auth/request_code   { email }
+         → 6-digit code is "sent" (console-print in dev, Resend in prod)
+
+    2. POST /api/auth/verify         { email, code, password }
+         → on success: user created + session cookie set
+
+    3. POST /api/auth/login          { email, password }
+         → on success: session cookie set
+
+    4. POST /api/auth/logout
+         → cookie cleared
+
+    5. GET  /api/auth/me
+         → current user dict, or 401
+
+Security shortcuts taken at this Phase B scope:
+  - No rate limiting (single-tenant demo; add later before public).
+  - No email-enumeration guard (we 404 on unknown emails during login
+    rather than always 401). Re-evaluate when going public.
+  - No CSRF tokens; cookies are SameSite=Lax and the endpoints are
+    POST-only, which blocks the common cross-site-fetch vectors.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import secrets
+
+from fastapi import APIRouter, HTTPException, Response, status
+from pydantic import BaseModel, Field
+
+from app.auth import email_sender, security, store
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+# ── Request models ───────────────────────────────────────
+
+class RequestCodeBody(BaseModel):
+    email: str
+
+
+class VerifyBody(BaseModel):
+    email:    str
+    code:     str
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginBody(BaseModel):
+    email:    str
+    password: str
+
+
+# ── Helpers ──────────────────────────────────────────────
+
+def _norm_email(raw: str) -> str:
+    e = (raw or "").strip().lower()
+    if not _EMAIL_RE.match(e):
+        raise HTTPException(status_code=400, detail="Invalid email format")
+    return e
+
+
+def _set_session_cookie(response: Response, user_id: str) -> None:
+    token = security.sign_session(user_id)
+    response.set_cookie(
+        key=security.SESSION_COOKIE_NAME,
+        value=token,
+        max_age=security.SESSION_MAX_AGE_S,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # demo runs over http://localhost; flip to True in prod over HTTPS
+        path="/",
+    )
+
+
+# ── Endpoints ────────────────────────────────────────────
+
+@router.post("/request_code")
+def request_code(body: RequestCodeBody):
+    """
+    Issue a fresh 6-digit verification code for `email` and dispatch
+    it. The code is hashed before storage; only the latest issued
+    code is valid (prior un-consumed codes for the same email are
+    marked consumed inside stash_verification_code).
+    """
+    email = _norm_email(body.email)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+
+    code_hash = security.hash_code(code)
+    expires = store.stash_verification_code(email, code_hash)
+
+    sent = email_sender.send_verification_code(email, code)
+    if not sent:
+        logger.error("[auth] email send failed for %s", email)
+        # We still stashed the code; if the user retries, a new one
+        # is issued. Failing closed is fine.
+        raise HTTPException(status_code=502, detail="Email send failed; try again")
+
+    return {
+        "ok": True,
+        "email": email,
+        "expires_at": expires.isoformat(),
+        # NEVER include the code itself in the response.
+    }
+
+
+@router.post("/verify")
+def verify(body: VerifyBody, response: Response):
+    """
+    Consume the latest active verification code for `email` and
+    create the account with the given password. On success the
+    session cookie is set, so the client is logged in immediately
+    — saves a round-trip vs forcing a separate /login after verify.
+    """
+    email = _norm_email(body.email)
+
+    if store.find_user_by_email(email):
+        raise HTTPException(
+            status_code=409,
+            detail="Email is already registered. Use /login instead.",
+        )
+
+    code_row = store.pop_latest_active_code(email)
+    if not code_row:
+        raise HTTPException(
+            status_code=400,
+            detail="No active verification code. Request a new one.",
+        )
+    if not security.verify_code(body.code, code_row["code_hash"]):
+        # NOTE: pop_latest_active_code already marked the row
+        # consumed, so a wrong submission also invalidates the code.
+        # That makes brute-force harder without rate-limit infra.
+        raise HTTPException(status_code=400, detail="Incorrect code")
+
+    password_hash = security.hash_password(body.password)
+    user = store.create_user(email, password_hash)
+
+    _set_session_cookie(response, user["id"])
+    logger.info("[auth] registered + logged in user=%s email=%s", user["id"], email)
+    return {"ok": True, "user_id": user["id"], "email": email}
+
+
+@router.post("/login")
+def login(body: LoginBody, response: Response):
+    email = _norm_email(body.email)
+    user = store.find_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid email or password")
+    if not security.verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid email or password")
+
+    _set_session_cookie(response, user["id"])
+    logger.info("[auth] login user=%s", user["id"])
+    return {"ok": True, "user_id": user["id"], "email": email}
+
+
+@router.post("/logout")
+def logout(response: Response):
+    response.delete_cookie(security.SESSION_COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+# Importing here keeps the deps module from being a hard dep at module
+# load time (helps tests that don't exercise auth at all).
+from app.auth.deps import current_user_required  # noqa: E402
+from fastapi import Depends  # noqa: E402
+
+
+@router.get("/me")
+def me(user: dict = Depends(current_user_required)):
+    """Return the current user (sans password). 401 if no session."""
+    return {"ok": True, "user": user}

@@ -72,17 +72,48 @@
 
 ### 🟡 P1-1 ① 前端首次登录引导
 
-**现状**：新用户直接进 chat，无 profile，LLM 第一句回答没法个性化。
+**现状**：新用户直接进 chat，无 profile，LLM 第一句回答没法个性化；并且整个应用还是 hardcode 的 `demo_001` 单用户。
 
-**目标**
-- [ ] 新会话首次打开时检测 profile 是否为空
-- [ ] 弹出引导卡片收集：**专业 / 学院 / 年级 / 当前学期**（最小集，不要一次问太多）
-- [ ] 填写后写入 memory（[app/memory/](app/memory/)），后续对话直接用
-- [ ] 提供"跳过"按钮，但跳过的用户在第一条消息后再温和追问一次
+**目标**（升级版，从"轻量弹窗"扩展为"真账号 + 数据驱动引导"）
 
-**涉及文件**：[static/index.html](static/index.html)、[app/routers/memory.py](app/routers/memory.py)、[app/memory/manager.py](app/memory/manager.py)
+需要分 4 个阶段，按依赖顺序做：
 
-**验收**：清空 memory 后打开页面 → 看到引导 → 填完 → 问"推荐一门课" → LLM 回答里要引用刚填的专业。
+#### P1-1a · 数据可用性验证（必须先做，0.5-1 天）
+- [ ] 写脚本探测 Anteater API：departments / majors / 各专业必修课 / GE 分类
+- [ ] 报告 API 能给什么、缺什么
+- [ ] 缺的部分定方案：scrape catalogue.uci.edu 或手写 JSON
+- [ ] 把数据落到 `data/uci_general/` 下成可查询结构
+
+#### P1-1b · 真实认证系统（3-4 天）
+- [ ] 选邮件服务商（Resend / SendGrid / SMTP）
+- [ ] users SQLite 表：email / password_hash / verified / created_at
+- [ ] `POST /auth/register` 发验证码邮件
+- [ ] `POST /auth/verify` 验证 + 设密码
+- [ ] `POST /auth/login` cookie session
+- [ ] FastAPI 依赖注入加 `auth_required` middleware
+- [ ] 前端登录/注册页面
+- [ ] 现有路由从 `demo_001` 迁到当前登录用户 id
+- [ ] 老的 `data/memory/demo_001/` 保留作为本地测试 fallback
+
+#### P1-1c · Onboarding 向导（2 天）
+- [ ] 多步向导 UI：学院 → 年级 → 专业 → 已修课程
+- [ ] 候选课程卡片：根据专业 + GE 类别预筛选，点击切换"已修"
+- [ ] 右下角 Save / Skip
+- [ ] 写入 profile.json
+- [ ] Skip 后第一条消息时 agent 自然追问
+
+#### P1-1d · Profile 编辑器（0.5 天）
+- [ ] 已有 profile modal 扩展为可编辑
+- [ ] 三态切换：已修 / 进行中 / 未修
+- [ ] 实时写回后端
+
+**涉及文件**：[app/routers/memory.py](app/routers/memory.py)、新增 `app/routers/auth.py`、新增 `app/data/uci_general/departments.py`、新增 `app/data/uci_general/ge_requirements.py`、[scripts/](scripts/)、[static/index.html](static/index.html)（或拆出 login.html / onboarding.html）
+
+**验收**：
+- 全新邮箱注册 → 收到验证码 → 设密码 → 登录
+- 首次登录走 4 步向导 → 写入 profile
+- 重新登录直接进 chat
+- Profile modal 可编辑课程
 
 ---
 

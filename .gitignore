@@ -12,3 +12,5 @@ data/memory/*/sessions/
 data/memory/*/turn_log.jsonl*
 data/grades_cache/
 data/logs/
+data/auth.db
+data/auth.secret

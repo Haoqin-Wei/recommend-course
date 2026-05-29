@@ -9,14 +9,12 @@ Priority order (per SKILL.md):
   3. Are selected/current courses clear?
   4. If recommending: what is the core goal?
   5. If time matters: what time slots are available?
+
+Entity extraction is LLM-only — the legacy keyword fallback was
+removed once the agent loop landed. The agent reads the raw message
+through its own tools / system prompt, so a noisy pre-agent keyword
+pass was both redundant and a source of false positives.
 """
-
-import re
-from typing import Optional
-
-
-# Used by the keyword fallback to find course IDs in a message.
-_COURSE_ID = re.compile(r'\b[A-Z][A-Z0-9]{1,7}\d+[A-Z]?\b', re.IGNORECASE)
 
 
 def detect_missing_fields(session_state: dict, intent: str) -> list[dict]:
@@ -84,103 +82,22 @@ _FORWARDED_FIELDS = (
 )
 
 
-async def extract_info_from_message(message: str, session_state: dict) -> dict:
+async def extract_info_from_message(message: str) -> dict:
     """
-    Extract key fields from a user message.
-
-    Strategy:
-      1. Try LLM extraction (handles natural phrasing well, distinguishes
-         "I'm taking X" vs "I took X" vs "tell me about X").
-      2. Fall back to keyword matching if LLM is unavailable OR returns
-         nothing useful — keyword fallback now also handles currently_taking
-         and completed via simple verb-near-course-ID heuristics.
+    Extract key fields from a user message via the LLM. Returns an
+    empty dict if the LLM is unavailable or has nothing useful — the
+    agent loop can still answer correctly from the raw message.
     """
     from app.llm.adapter import extract_info_llm
 
     llm_result = await extract_info_llm(message)
-    if llm_result:
-        updates = {}
-        for field in _FORWARDED_FIELDS:
-            v = llm_result.get(field)
-            # Skip empty values (None, "", [], 0 — but keep target_gpa numerical 0... unlikely)
-            if v in (None, "", []):
-                continue
-            updates[field] = v
-        if updates:
-            return updates
-        # LLM returned a dict but no useful fields — fall through to keyword fallback
+    if not llm_result:
+        return {}
 
-    return _extract_info_keyword(message)
-
-
-def _extract_info_keyword(message: str) -> dict:
-    """Keyword-based field extraction (used when LLM is unavailable or empty)."""
     updates = {}
-    msg_lower = message.lower()
-
-    # ── Term detection ────────────────────────────────────
-    term_map = {
-        "fall 2025": "Fall 2025", "fall 25": "Fall 2025",
-        "winter 2026": "Winter 2026", "winter 26": "Winter 2026",
-        "spring 2026": "Spring 2026", "spring 26": "Spring 2026",
-        "fall 2026": "Fall 2026",
-    }
-    for key, val in term_map.items():
-        if key in msg_lower:
-            updates["term"] = val
-            break
-
-    # ── Major detection ───────────────────────────────────
-    major_map = {
-        "computer science": "Computer Science", "cs": "Computer Science",
-        "compsci": "Computer Science",
-        "informatics": "Informatics",
-        "data science": "Data Science",
-    }
-    for key, val in major_map.items():
-        if key in msg_lower:
-            updates["major"] = val
-            break
-
-    # ── Difficulty / goal ─────────────────────────────────
-    if any(w in msg_lower for w in ["easy", "chill", "light", "simple", "gpa boost"]):
-        updates["difficulty_preference"] = "easy"
-    elif any(w in msg_lower for w in ["challenging", "hard", "rigorous"]):
-        updates["difficulty_preference"] = "hard"
-
-    if any(w in msg_lower for w in ["major requirement", "satisfy requirement", "count toward"]):
-        updates["recommendation_goal"] = "major_requirement"
-    elif any(w in msg_lower for w in ["easy", "boost gpa", "light"]):
-        updates["recommendation_goal"] = "easy_gpa"
-    elif any(w in msg_lower for w in ["good professor", "best professor", "rmp", "rating"]):
-        updates["recommendation_goal"] = "professor_quality"
-    elif any(w in msg_lower for w in ["ge", "general education"]):
-        updates["recommendation_goal"] = "ge_fulfillment"
-
-    # ── Course-status detection (NEW) ─────────────────────
-    # Walk every course-ID match. If a status verb appears within 30 chars
-    # before the match, classify it. "I'm taking STAT67" → currently_taking.
-    taking_verbs = ("taking", "in ", "currently in", "enrolled in", "正在上")
-    completed_verbs = ("took", "passed", "finished", "completed", "已修过", "已修", "上过")
-
-    for m in _COURSE_ID.finditer(message):
-        cid = m.group().upper()
-        start = max(0, m.start() - 30)
-        before = msg_lower[start:m.start()]
-        if any(v in before for v in taking_verbs):
-            updates.setdefault("currently_taking", []).append(cid)
-        elif any(v in before for v in completed_verbs):
-            updates.setdefault("completed", []).append(cid)
-
-    # Dedup the lists
-    for k in ("currently_taking", "completed"):
-        if k in updates:
-            seen = set()
-            deduped = []
-            for c in updates[k]:
-                if c not in seen:
-                    seen.add(c)
-                    deduped.append(c)
-            updates[k] = deduped
-
+    for field in _FORWARDED_FIELDS:
+        v = llm_result.get(field)
+        if v in (None, "", []):
+            continue
+        updates[field] = v
     return updates

@@ -135,15 +135,6 @@ def generate_professor_answer(name: str, rating: Optional[dict]) -> str:
     )
 
 
-def generate_off_topic_response(message: str) -> str:
-    """Friendly response for non-course-related questions."""
-    return (
-        "I'm your UCI course advisor, so I'm best at helping with course selection, "
-        "professor recommendations, schedule planning, and prerequisite checks. "
-        "Feel free to ask me anything about your upcoming courses!"
-    )
-
-
 # ── Internal helpers ─────────────────────────────────────
 
 def _best_section(sections: list[dict]) -> Optional[dict]:
